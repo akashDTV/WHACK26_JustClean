@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Live Dance Coach</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body data-band="none" data-screen="loading">
+
+  <!-- Screen-reader announcements (a11y.js writes here) -->
+  <div id="announcer" class="sr-only" aria-live="polite" aria-atomic="true"></div>
+
+  <!-- Edge glow sits over everything while dancing -->
+  <div class="glow" aria-hidden="true"></div>
+
+  <!-- ============ LOADING ============ -->
+  <section id="screen-loading" class="screen active" aria-labelledby="loading-h">
+    <div class="center-msg">
+      <h1 id="loading-h">Getting ready…</h1>
+      <p class="muted" id="loading-msg">Loading the body-tracking model</p>
+    </div>
+  </section>
+
+  <!-- ============ ERROR ============ -->
+  <section id="screen-error" class="screen" aria-labelledby="error-h">
+    <div class="center-msg">
+      <h1 id="error-h">Something went wrong</h1>
+      <p class="muted" id="error-msg" style="font-size: var(--fs-xl)"></p>
+      <button class="btn btn-primary" data-action="reset">Try again</button>
+    </div>
+  </section>
+
+  <!-- ============ CHOOSER ============ -->
+  <section id="screen-chooser" class="screen" aria-labelledby="chooser-h">
+    <header class="topbar">
+      <h1 id="chooser-h" class="brand">Live Dance Coach</h1>
+      <span class="muted">Video stays on this laptop · only a score summary goes to Claude</span>
+    </header>
+
+    <div class="step">
+      <h2>1 · Pick a dance</h2>
+      <div class="grid-clips" id="clip-list" role="group" aria-label="Dance clips">
+        <!-- clip cards rendered by app.js -->
+        <div class="upload-card" id="upload-card">
+          <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="var(--accent-soft)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 16V4"/><path d="M6 10l6-6 6 6"/><path d="M4 20h16"/></svg>
+          <label for="upload-input" class="btn btn-ghost" style="font-weight:600">Upload your own clip</label>
+          <input id="upload-input" type="file" accept="video/mp4,video/webm,video/quicktime" class="sr-only">
+          <span class="muted" style="font-size: var(--fs-sm)">MP4 / WebM / MOV · up to 30 s · one dancer, full body</span>
+          <div class="progress" id="upload-progress" hidden><div></div></div>
+          <span class="upload-status" id="upload-status" aria-live="polite"></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="step">
+      <h2 id="speed-h"><label for="speed-slider">2 · Practice speed</label></h2>
+      <div class="speed-row">
+        <span class="speed-end" aria-hidden="true" id="speed-min-label"></span>
+        <input type="range" id="speed-slider" class="speed-slider" aria-describedby="speed-value">
+        <span class="speed-end" aria-hidden="true" id="speed-max-label"></span>
+        <output id="speed-value" for="speed-slider" class="speed-value">1×</output>
+        <button class="btn btn-ghost" id="speed-reset" type="button">Reset to 1×</button>
+      </div>
+    </div>
+
+    <div class="step">
+      <h2 id="coach-h">3 · Pick your coach</h2>
+      <div class="grid-coaches" id="coach-list" role="group" aria-labelledby="coach-h"></div>
+    </div>
+
+    <div class="btn-row">
+      <button class="btn btn-primary" id="start-btn" data-action="start" disabled>Start dancing</button>
+      <span class="muted" id="start-hint">Pick a dance to begin · or press Space</span>
+    </div>
+  </section>
+
+  <!-- ============ CALIBRATING ============ -->
+  <section id="screen-calibrating" class="screen" aria-labelledby="calib-h">
+    <header class="topbar">
+      <h1 id="calib-h" class="brand">Step into the box</h1>
+      <span class="muted">Whole body visible for 2 seconds</span>
+    </header>
+    <div class="calib-wrap">
+      <div class="calib-cam media">
+        <img class="cam-feed" alt="Your webcam with body tracking" data-src="/camera">
+        <span class="placeholder">[WEBCAM + SKELETON]</span>
+        <div class="calib-box" id="calib-box" aria-hidden="true"></div>
+      </div>
+      <div class="calib-side">
+        <span class="label">To start</span>
+        <ul class="calib-reasons" id="calib-reasons" aria-live="polite"></ul>
+        <div class="calib-progress" role="progressbar" aria-label="Calibration progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="calib-progress"><div></div></div>
+        <button class="btn btn-ghost" data-action="back">Back to dances</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ DANCING (also used for countdown + paused) ============ -->
+  <section id="screen-dancing" class="screen" aria-labelledby="dance-h">
+    <h1 id="dance-h" class="sr-only">Dancing</h1>
+    <header class="topbar">
+      <div class="btn-row">
+        <span class="chip" id="section-chip">Section 1</span>
+        <span class="chip" id="speed-chip">1× speed</span>
+      </div>
+      <span class="muted" id="coach-chip">Coach</span>
+    </header>
+    <div class="stage">
+      <div class="pane">
+        <span class="label">Reference</span>
+        <div class="media">
+          <video id="ref-video" playsinline preload="auto"></video>
+          <span class="placeholder" id="ref-placeholder">[REFERENCE VIDEO]</span>
+        </div>
+      </div>
+      <div class="pane">
+        <span class="label">You</span>
+        <div class="media">
+          <img class="cam-feed" alt="Your webcam with body tracking" data-src="/camera">
+          <span class="placeholder">[WEBCAM + SKELETON]</span>
+          <div class="missing-list" id="missing-list" aria-live="polite"></div>
+        </div>
+      </div>
+      <div class="meter" aria-label="Live score">
+        <span class="score-num" id="score-num">–</span>
+        <span class="band-label" id="band-label">Waiting</span>
+        <div class="bar" aria-hidden="true"><div class="bar-fill" id="bar-fill"></div></div>
+        <div style="display:flex; flex-direction:column; align-items:center">
+          <span class="label">Streak</span>
+          <span class="streak-num" id="streak-num">0 s</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ REPORT ============ -->
+  <section id="screen-report" class="screen" aria-labelledby="report-h">
+    <h1 id="report-h" class="sr-only">Your feedback</h1>
+    <div class="coach-speech">
+      <div class="avatar lg" id="rep-avatar">?</div>
+      <div class="caption">
+        <span class="muted" id="rep-speaking">Coach</span>
+        <p class="caption-text" id="rep-caption" style="margin:0"></p>
+      </div>
+      <button class="btn btn-ghost" data-action="replay-voice">Replay voice</button>
+      <button class="btn btn-ghost" data-action="stop-voice">Stop voice</button>
+    </div>
+
+    <div class="report-cols">
+      <div class="report-left">
+        <div class="overall">
+          <span class="overall-num" id="rep-overall">–</span>
+          <div style="display:flex; flex-direction:column; gap:4px; padding-bottom:8px">
+            <span style="font-size: var(--fs-lg)" class="muted">/ 100 overall</span>
+            <span class="muted" style="font-size: var(--fs-sm)" id="rep-meta"></span>
+          </div>
+        </div>
+        <p id="rep-summary" style="margin:0; font-size: var(--fs-lg)"></p>
+        <div class="comp-grid" id="rep-components"></div>
+        <div style="display:flex; flex-direction:column; gap:10px">
+          <span class="label">Body parts · lowest first</span>
+          <div id="rep-parts" style="display:flex; flex-direction:column; gap:10px"></div>
+        </div>
+      </div>
+
+      <div class="report-right">
+        <span class="label">Priority fixes</span>
+        <div id="rep-fixes" style="display:flex; flex-direction:column; gap:16px"></div>
+        <div id="rep-caveat"></div>
+        <div class="btn-row" style="margin-top:auto">
+          <button class="btn btn-primary" data-action="try-again">Try again</button>
+          <button class="btn" data-action="show-replay">Replay</button>
+          <button class="btn" data-action="ask-panel">Ask the panel</button>
+        </div>
+        <div class="muted" id="rep-other-coaches"></div>
+      </div>
+    </div>
+
+    <!-- Detailed breakdown dropdown -->
+    <details class="breakdown" id="breakdown">
+      <summary>Detailed breakdown</summary>
+      <div class="breakdown-body" id="breakdown-body"></div>
+    </details>
+  </section>
+
+  <!-- ============ PANEL ============ -->
+  <section id="screen-panel" class="screen" aria-labelledby="panel-h">
+    <header class="topbar" style="align-items:flex-end">
+      <div style="display:flex; flex-direction:column; gap:6px">
+        <h1 id="panel-h" style="font-size:44px">The panel's verdict</h1>
+        <span class="muted" style="font-size: var(--fs-lg)">Same scores, four coaching styles</span>
+      </div>
+      <div class="btn-row" id="panel-scores"></div>
+    </header>
+    <div class="panel-grid" id="panel-grid"></div>
+    <div class="btn-row">
+      <button class="btn btn-primary" data-action="try-again">Try again</button>
+      <button class="btn" data-action="back-to-report">Back to my report</button>
+    </div>
+  </section>
+
+  <!-- ============ REPLAY (stretch) ============ -->
+  <section id="screen-replay" class="screen" aria-labelledby="replay-h">
+    <header class="topbar">
+      <h1 id="replay-h" class="brand">Replay</h1>
+      <button class="btn" data-action="back-to-report">Back to my report</button>
+    </header>
+    <div class="replay-stage">
+      <div class="pane"><span class="label">Reference</span><div class="media"><video id="replay-ref" playsinline controls></video></div></div>
+      <div class="pane"><span class="label">You</span><div class="media"><video id="replay-user" playsinline></video></div></div>
+    </div>
+    <span class="label">Score timeline · click a red zone to jump there</span>
+    <div class="timeline" id="timeline" role="group" aria-label="Score timeline"></div>
+  </section>
+
+  <!-- ============ OVERLAYS ============ -->
+  <div class="overlay" id="countdown-overlay" aria-live="assertive">
+    <span class="countdown-num" id="countdown-num">3</span>
+  </div>
+  <div class="overlay" id="banner-overlay" role="status" aria-live="assertive">
+    <span class="banner-text" id="banner-text"></span>
+  </div>
+  <div class="pop" id="pop" aria-hidden="true">CLEAN!</div>
+
+  <div class="conn" id="conn" data-state="connecting" role="status">Connecting…</div>
+  <div class="debug" id="debug" aria-hidden="true"><pre id="debug-pre">debug</pre></div>
+
+  <!-- Order matters: config → helpers → features → app → transport -->
+  <script src="js/coaches.js"></script>
+  <script src="js/a11y.js"></script>
+  <script src="js/speech.js"></script>
+  <script src="js/report.js"></script>
+  <script src="js/app.js"></script>
+  <script src="js/ws.js"></script>
+  <script src="js/fake.js"></script>
+</body>
+</html>
