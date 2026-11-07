@@ -1,0 +1,50 @@
+DETAILED BREAKDOWN
+========================================
+Overall match to the reference: Needs work
+
+HOW IT WENT
+  Position: Needs work. How closely your body shapes matched the reference.
+  Timing: Needs work. Whether you reached each position at the same moment as the reference.
+  Sharpness: Needs work. How quickly and cleanly you completed each movement.
+  Holds: Needs work. Whether you stayed in each pose for as long as the reference.
+
+SECTION BY SECTION
+
+Section 1 (0:00 - 0:04) - needs work overall
+  position needs work; timing needs work; sharpness needs work; holds needs work
+  Main joint to watch: left elbow.
+  Your body shapes were noticeably off from the reference.
+  Tracking was clear here.
+  Timing was the weakest part of this section. Keep an eye on your left elbow.
+
+Section 2 (0:04 - 0:08) - needs work overall
+  position needs work; timing needs work; sharpness needs work; holds needs work
+  Main joint to watch: right knee.
+  Your body shapes were well away from the reference.
+  Tracking was clear here.
+  Timing was the weakest part of this section. Keep an eye on your right knee.
+
+Section 3 (0:08 - 0:12) - needs work overall
+  position needs work; timing needs work; sharpness needs work; holds needs work
+  Main joint to watch: left shoulder.
+  Your body shapes were well away from the reference.
+  Tracking was clear here.
+  Timing was the weakest part of this section. Keep an eye on your left shoulder.
+
+Section 4 (0:12 - 0:16) - needs work overall
+  position needs work; timing needs work; sharpness needs work; holds needs work
+  Main joint to watch: right hip.
+  Your body shapes were well away from the reference.
+  Tracking was clear here.
+  Timing was the weakest part of this section. Keep an eye on your right hip.
+
+BODY PARTS (the ones needing most attention first)
+  Left shoulder: Needs work.
+  Right knee: Needs work.
+  Right hip: Needs work.
+  Right elbow: Needs work.
+  Left elbow: Needs work.
+
+HOW RELIABLE THIS IS
+  Almost the whole routine was tracked clearly.
+  Sections included: 1, 2, 3, 4.
