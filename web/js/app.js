@@ -113,7 +113,7 @@
         onclick: () => this.chooseCoach(c.id)
       },
         el("div", { class: "coach-head" },
-          el("div", { class: "avatar", style: `background:${c.color}`, "aria-hidden": "true", text: c.initial }),
+          window.makeAvatar(c),
           el("div", { style: "display:flex; flex-direction:column; gap:2px" },
             el("span", { class: "coach-name", text: c.name }),
             el("span", { class: "muted", style: "font-size: var(--fs-sm)", text: c.role }))),

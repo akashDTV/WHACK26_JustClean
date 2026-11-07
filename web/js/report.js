@@ -56,9 +56,7 @@
       const coach = window.coachById(msg.coach_id);
 
       // coach strip
-      const av = document.getElementById("rep-avatar");
-      av.textContent = coach.initial;
-      av.style.background = coach.color;
+      window.fillAvatar(document.getElementById("rep-avatar"), coach);
       document.getElementById("rep-speaking").textContent = `${coach.name} · ${coach.role}`;
       document.getElementById("rep-caption").textContent = fb.headline || "";
 
@@ -232,7 +230,7 @@
         const fix = (fb.priority_fixes || [])[0];
         return el("article", { class: "panel-card", "data-coach": coach.id },
           el("div", { class: "coach-head" },
-            el("div", { class: "avatar", style: `background:${coach.color}`, "aria-hidden": "true", text: coach.initial }),
+            window.makeAvatar(coach),
             el("div", { style: "display:flex; flex-direction:column; gap:2px" },
               el("span", { class: "coach-name", text: coach.name }),
               el("span", { class: "muted", style: "font-size: var(--fs-sm)", text: coach.role }))),

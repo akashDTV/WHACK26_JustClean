@@ -167,8 +167,10 @@ h1, h2, h3 { margin: 0; font-family: var(--font-display); }
 .coach-head { display: flex; align-items: center; gap: 12px; }
 .avatar {
   width: 48px; height: 48px; border-radius: 999px; display: flex; align-items: center; justify-content: center;
-  font-weight: 700; font-size: var(--fs-lg); color: var(--on-accent); flex-shrink: 0;
+  font-weight: 700; font-size: var(--fs-lg); color: var(--on-accent); flex-shrink: 0; overflow: hidden;
 }
+.avatar.lg { width: 64px; height: 64px; font-size: var(--fs-xl); }
+.avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .avatar.lg { width: 64px; height: 64px; font-size: var(--fs-xl); }
 .coach-name { font-size: var(--fs-lg); font-weight: 600; }
 .coach-quote { font-style: italic; color: var(--text-soft); }
