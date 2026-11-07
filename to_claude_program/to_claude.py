@@ -192,6 +192,8 @@ STRICT RULES:
 - Treat body_part_scores with score null as unavailable; do not guess them.
 - If confidence is low or data is missing, say so in data_caveat and avoid unsupported claims. If there are no reliable findings, return an empty priority_fixes array.
 - Keep everything concise enough for an on-screen results page and to be spoken aloud.
+- Never mention tracking, tracked frames, confidence or whether something was detected, except inside data_caveat.
+- Do not repeat yourself: each section note must say something new and must not restate the joint or measurements already listed for that section.
 - Write overall_summary fully in the personality style given in the input (coach_personality.style_guide): let the tone, word choice and energy clearly reflect the sliders. Do NOT include any score or number in overall_summary (the scores are shown elsewhere); describe how the run went in words. The priority fixes use the plain-language style described under PRIORITY FIX STYLE below.
 
 PRIORITY FIX STYLE (title, subheading, description, fix, and section notes):
@@ -327,23 +329,28 @@ def canned_overall(payload, personality):
     return " ".join(parts)
 
 
-def canned_section_note(sec):
-    """Plain template note for one section (used if Claude's note is missing)."""
+def canned_section_note(sec, routine_weakest=None):
+    """Short template note (used if Claude's note is missing). Empty unless this section's
+    weak spot is clear and differs from the routine's overall weak spot (no repeating)."""
     comps = {c: sec[c] for c in COMPONENTS if isinstance(sec.get(c), (int, float))}
-    parts = []
     if len(comps) >= 2:
-        parts.append(f"{min(comps, key=comps.get).capitalize()} was the weakest part of this section.")
-    if sec.get("weakest_joint"):
-        parts.append(f"Keep an eye on your {pretty(sec['weakest_joint'])}.")
-    if isinstance(sec.get("confidence"), (int, float)) and sec["confidence"] < MIN_CONFIDENCE:
-        parts.append("Tracking was less reliable here, so treat this with some caution.")
-    return " ".join(parts) or "No standout issues were measured in this section."
+        hi, lo = max(comps, key=comps.get), min(comps, key=comps.get)
+        if comps[hi] - comps[lo] >= 10 and lo != routine_weakest:
+            return f"{lo.capitalize()} was the weakest part of this section."
+    return ""
+
+
+def routine_weakest(payload):
+    sc = payload["scores"]
+    comps = {c: sc[c] for c in COMPONENTS if isinstance(sc.get(c), (int, float))}
+    return min(comps, key=comps.get) if len(comps) >= 2 else None
 
 
 def canned_response(payload, personality):
     return {
         "overall_summary": canned_overall(payload, personality),
-        "section_notes": {sec.get("section"): canned_section_note(sec) for sec in payload["sections"]},
+        "section_notes": {sec.get("section"): canned_section_note(sec, routine_weakest(payload))
+                          for sec in payload["sections"]},
         "priority_fixes": [fix_from_finding(f) for f in payload["top_findings"][:MAX_FIXES]],
         "data_caveat": None,
     }
@@ -471,11 +478,12 @@ def level_word(score):
 
 
 COMPONENT_MEANING = {
-    "position": "How closely your body shapes matched the reference.",
-    "timing": "Whether you reached each position at the same moment as the reference.",
-    "sharpness": "How quickly and cleanly you completed each movement.",
-    "holds": "Whether you stayed in each pose for as long as the reference.",
+    "position": "how closely your body shapes matched the reference",
+    "timing": "reaching each position at the same moment as the reference",
+    "sharpness": "how quickly and cleanly you finished each movement",
+    "holds": "staying in each pose as long as the reference",
 }
+LEVELS = ["Excellent", "Strong", "Decent", "Needs work"]   # best to worst
 
 
 def clock(seconds):
@@ -504,34 +512,29 @@ def length_phrase(ms, what):
     return f"Your {what} were {how} the reference's."
 
 
-def tracking_phrase(conf):
-    return ("Tracking was clear here." if conf >= 0.85 else
-            "Tracking was fairly clear here." if conf >= 0.6 else
-            "Tracking was shaky here, so treat this with some caution.")
-
-
-def coverage_phrase(pct):
-    return ("Almost the whole routine was tracked clearly." if pct >= 90 else
-            "Most of the routine was tracked clearly." if pct >= 75 else
-            "Only part of the routine was tracked clearly, so take the results with some caution."
-            if pct >= 50 else
-            "Very little of the routine was tracked clearly, so these results are rough.")
+def group_by_level(pairs):
+    """[(name, score)] -> {level: [names]}, keeping the given order inside each level."""
+    groups = {}
+    for name, score in pairs:
+        groups.setdefault(level_word(score), []).append(name)
+    return groups
 
 
 def build_breakdown(params, payload, dropped, result, notes):
-    """Qualitative breakdown: no scores, just plain words."""
+    """Qualitative breakdown: plain words, no scores, nothing about tracking."""
     scores = params.get("scores", {})
     L = ["DETAILED BREAKDOWN", "=" * 40]
     if level_word(scores.get("overall")):
         L.append(f"Overall match to the reference: {level_word(scores['overall'])}")
 
-    L += ["", "HOW IT WENT"]
-    for c in COMPONENTS:
-        if c in scores:
-            w = level_word(scores[c])
-            L.append(f"  {c.capitalize()}: {w}. {COMPONENT_MEANING[c]}" if w else
-                     f"  {c.capitalize()}: couldn't be judged this time "
-                     f"(not enough clear moments were detected).")
+    comp_pairs = [(c, scores[c]) for c in COMPONENTS if level_word(scores.get(c))]
+    if comp_pairs:
+        L += ["", "HOW IT WENT"]
+        groups = group_by_level(comp_pairs)
+        for lvl in LEVELS:
+            if lvl in groups:
+                L.append(f"  {lvl}: " + "; ".join(
+                    f"{c} ({COMPONENT_MEANING[c]})" for c in groups[lvl]))
 
     if payload["sections"]:
         L += ["", "SECTION BY SECTION"]
@@ -541,10 +544,8 @@ def build_breakdown(params, payload, dropped, result, notes):
         if "start_s" in sec and "end_s" in sec:
             head += f" ({clock(sec['start_s'])} - {clock(sec['end_s'])})"
         if level_word(sec.get("overall")):
-            head += f" - {level_word(sec['overall']).lower()} overall"
+            head += f": {level_word(sec['overall']).lower()}"
         L += ["", head]
-        L.append("  " + "; ".join(f"{c} {(level_word(sec.get(c)) or 'not judged').lower()}"
-                                   for c in COMPONENTS if c in sec))
         if sec.get("weakest_joint"):
             L.append(f"  Main joint to watch: {pretty(sec['weakest_joint'])}.")
         if isinstance(sec.get("mean_angle_error_deg"), (int, float)):
@@ -555,44 +556,19 @@ def build_breakdown(params, payload, dropped, result, notes):
             L.append("  " + length_phrase(sec["movement_duration_difference_ms"], "movements"))
         if isinstance(sec.get("hold_duration_difference_ms"), (int, float)):
             L.append("  " + length_phrase(sec["hold_duration_difference_ms"], "holds"))
-        if isinstance(sec.get("confidence"), (int, float)):
-            L.append("  " + tracking_phrase(sec["confidence"]))
         if notes.get(sid):
             L.append(f"  {notes[sid]}")
 
     parts = payload["body_part_scores"]
-    if parts:
-        scored = sorted(((k, v) for k, v in parts.items()
-                         if isinstance(v, dict) and isinstance(v.get("score"), (int, float))),
-                        key=lambda kv: kv[1]["score"])
-        scored_names = {k for k, _ in scored}
-        L += ["", "BODY PARTS (the ones needing most attention first)"]
-        for k, v in scored:
-            shaky = " Tracking was shaky, so this is less certain." \
-                if isinstance(v.get("confidence"), (int, float)) and v["confidence"] < MIN_CONFIDENCE else ""
-            L.append(f"  {pretty(k).capitalize()}: {level_word(v['score'])}.{shaky}")
-        for k in parts:
-            if k not in scored_names:
-                L.append(f"  {pretty(k).capitalize()}: couldn't be judged (not enough clear tracking).")
-
-    dq = params.get("data_quality", {})
-    L += ["", "HOW RELIABLE THIS IS"]
-    if isinstance(dq.get("tracked_frame_percentage"), (int, float)):
-        L.append("  " + coverage_phrase(dq["tracked_frame_percentage"]))
-    if dq.get("valid_sections"):
-        L.append("  Sections included: " + ", ".join(str(x) for x in dq["valid_sections"]) + ".")
-    if dq.get("excluded_sections"):
-        L.append("  Sections left out (the dancer was out of frame or tracking failed): "
-                 + ", ".join(str(x) for x in dq["excluded_sections"]) + ".")
-    if dq.get("timing_events_detected") == 0:
-        L.append("  No clear timing moments were found, so timing wasn't judged.")
-    if dq.get("hold_events_detected") == 0:
-        L.append("  No clear holds were found, so holds weren't judged.")
-    if dropped:
-        L.append("  Left out because tracking was unreliable: " + "; ".join(
-            f"{pretty(f.get('body_part'))} in section {f.get('section')}" for f in dropped) + ".")
-    if result.get("data_caveat"):
-        L.append(f"  {result['data_caveat']}")
+    scored = sorted(((k, v["score"]) for k, v in parts.items()
+                     if isinstance(v, dict) and isinstance(v.get("score"), (int, float))),
+                    key=lambda kv: kv[1])
+    if scored:
+        L += ["", "BODY PARTS (needing most attention first)"]
+        groups = group_by_level([(pretty(k), sc) for k, sc in scored])
+        for lvl in reversed(LEVELS):
+            if lvl in groups:
+                L.append(f"  {lvl}: " + ", ".join(groups[lvl]))
     return "\n".join(L) + "\n"
 
 
