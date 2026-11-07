@@ -1,0 +1,35 @@
+{
+  "overall_score": 42,
+  "priority_fixes": [
+    {
+      "rank": 1,
+      "section": 3,
+      "timestamp_s": 9.0,
+      "body_part": "left shoulder",
+      "title": "Match your left shoulder",
+      "subheading": "Section 3, about 9 seconds in",
+      "description": "Your left shoulder was lower than the reference, by roughly 32 degrees.",
+      "fix": "Slow section 3 right down and check your left shoulder in a mirror until it matches the reference, then build the speed back up."
+    },
+    {
+      "rank": 2,
+      "section": 2,
+      "timestamp_s": 5.5,
+      "body_part": "right knee",
+      "title": "Match your right knee",
+      "subheading": "Section 2, about 6 seconds in",
+      "description": "Your right knee was more bent than the reference, by roughly 30 degrees.",
+      "fix": "Slow section 2 right down and check your right knee in a mirror until it matches the reference, then build the speed back up."
+    },
+    {
+      "rank": 3,
+      "section": 2,
+      "timestamp_s": 6.8,
+      "body_part": "right arm",
+      "title": "Land your right arm with the reference",
+      "subheading": "Section 2, about 7 seconds in",
+      "description": "Your right arm reached the position about 0.43 seconds after the reference.",
+      "fix": "Loop the transition in section 2 and try to land in the final position at the same moment as the reference."
+    }
+  ]
+}
