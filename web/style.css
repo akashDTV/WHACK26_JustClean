@@ -486,3 +486,8 @@ h1[tabindex="-1"]:focus { outline: none; }
 }
 @media (max-width: 900px) { .pop.catchphrase { font-size: 28px; } .pop.catchphrase .pop-avatar { width: 40px; height: 40px; } }
 @media (prefers-reduced-motion: reduce) { .pop.catchphrase.show { animation: none; transform: translate(-50%, -50%); } }
+
+/* "Mirror the dancer": flip the reference video while dancing (scoring flips on the server) */
+.mirror-row { display: flex; gap: 16px; flex-wrap: wrap; align-items: center; margin-top: 16px; }
+#mirror-ref-btn[aria-pressed="true"] { border-color: var(--accent, #8b7cff); color: var(--accent, #8b7cff); }
+body.ref-mirrored #ref-video { transform: scaleX(-1); }

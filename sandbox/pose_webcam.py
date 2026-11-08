@@ -160,7 +160,7 @@ REF_PROCESS_HEIGHT = 480  # reference frames are shrunk to this height for the
 
 CAMERA_INDEX = 0          # try 1 if you have multiple cameras
 MODEL_VARIANT = "lite"    # "lite" (fastest), "full", or "heavy" (most accurate)
-MIRROR = True             # selfie-style view (applied to the reference too)
+MIRROR = False             # selfie-style view (applied to the reference too)
 MIN_VISIBILITY = 0.5      # ignore landmarks the model isn't confident about
 MAX_POSES = 1             # track at most this many people in the live feed
 TARGET_FPS = 30           # set to None for uncapped

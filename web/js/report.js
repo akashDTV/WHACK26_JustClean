@@ -136,13 +136,7 @@
 
       // other coaches links
       const others = window.COACHES.filter((c) => c.id !== coach.id);
-      document.getElementById("rep-other-coaches").replaceChildren(
-        "Hear from another coach: ",
-        ...others.flatMap((c, i) => [
-          i ? " · " : "",
-          el("a", { href: "#", onclick: (e) => { e.preventDefault(); window.App.send("command", { name: "choose_coach", value: c.id, rerun_report: true }); }, text: c.name })
-        ])
-      );
+      
 
       this.renderBreakdown(fb, det);
     },

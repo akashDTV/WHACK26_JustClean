@@ -296,6 +296,7 @@ class DanceSession:
         self.coach_id = None
         self.mirror = True
         self.auto_pause = True
+        self.mirror_ref = False      # dance the reference as a mirror image (page toggle)
 
         self.state = "waiting"
         self._task: Optional[asyncio.Task] = None
@@ -335,6 +336,10 @@ class DanceSession:
             self.camera.mirror = self.mirror
         elif name == "auto_pause":
             self.auto_pause = bool(value)
+        elif name == "mirror_ref":
+            self.mirror_ref = bool(value)
+        elif name == "restart":
+            await self._restart()
         elif name == "start":
             await self._start(msg)
         elif name in ("reset", "try_again"):
@@ -355,8 +360,22 @@ class DanceSession:
             self.coach_id = msg["coach"]
         with contextlib.suppress(TypeError, ValueError):
             self.speed = float(msg.get("speed", self.speed))
-        print(f"[session] Start: clip={self.clip_id} speed={self.speed} coach={self.coach_id}")
+        if "mirror_ref" in msg:
+            self.mirror_ref = bool(msg["mirror_ref"])
+        print(f"[session] Start: clip={self.clip_id} speed={self.speed} coach={self.coach_id} "
+              f"mirror_ref={self.mirror_ref}")
         self._task = asyncio.get_running_loop().create_task(self._run(self.clip_id))
+
+    async def _restart(self):
+        """Restart button: stop this run and go straight back into the countdown, then play
+        the clip from the beginning (no second calibration - the dancer is already in place)."""
+        clip = self.clip_id
+        await self._cancel_run()
+        if not clip:
+            await self._set_state("waiting")
+            return
+        print(f"[session] Restart: clip={clip}")
+        self._task = asyncio.get_running_loop().create_task(self._run(clip, calibrate=False))
 
     async def _reset(self):
         await self._cancel_run()
@@ -393,7 +412,7 @@ class DanceSession:
             raise RuntimeError("The camera stopped unexpectedly")
 
     # ---- the dance ----------------------------------------------------------
-    async def _run(self, clip_id: Optional[str]):
+    async def _run(self, clip_id: Optional[str], calibrate: bool = True):
         try:
             if not clip_id:
                 raise RuntimeError("Choose a clip first")
@@ -401,6 +420,8 @@ class DanceSession:
                 track = self.library.track(clip_id)
             except ValueError as exc:
                 raise RuntimeError(str(exc))
+            if self.mirror_ref:                      # score against the flipped reference
+                track = engine.mirror_track(track)
 
             await self._set_state("loading", "Starting the camera and body-tracking model")
             self.camera.mirror = self.mirror
@@ -408,7 +429,8 @@ class DanceSession:
             self.camera.clock = None
             await asyncio.to_thread(self.camera.start)
 
-            await self._calibrate()
+            if calibrate:
+                await self._calibrate()
             await self._countdown()
             stats = await self._play(track)
             await self._finish(stats, clip_id)

@@ -21,6 +21,7 @@
       rate: 1,
       coachId: window.COACHES[0].id,
       mirror: true,
+      mirrorRef: false,     // flip the reference video (dance it like a mirror)
       autoPause: true,
       lastStreakPop: 0,
       fake: false
@@ -194,6 +195,17 @@
       s.addEventListener("input", () => this.setSpeed(parseFloat(s.value), false));
       s.addEventListener("change", () => this.setSpeed(parseFloat(s.value), true));
       $("speed-reset").addEventListener("click", () => this.setSpeed(SPEED.default, true));
+      $("mirror-ref-btn").addEventListener("click", () => this.setMirrorRef(!this.state.mirrorRef));
+    },
+
+    // "Mirror the dancer": flip the reference video; the server mirrors the scoring to match.
+    setMirrorRef(on) {
+      this.state.mirrorRef = !!on;
+      const b = $("mirror-ref-btn");
+      b.setAttribute("aria-pressed", String(this.state.mirrorRef));
+      b.textContent = `Mirror the dancer: ${this.state.mirrorRef ? "on" : "off"}`;
+      document.body.classList.toggle("ref-mirrored", this.state.mirrorRef);
+      this.send("command", { name: "mirror_ref", value: this.state.mirrorRef });
     },
 
     setSpeed(r, notify = true) {
@@ -235,7 +247,7 @@
       if (!this.state.clipId || $("start-btn").disabled) return;
       unlockMedia();
       this.state.cp = null;                     // fresh catchphrase timing for each run
-      this.send("command", { name: "start", clip: this.state.clipId, speed: this.state.rate, coach: this.state.coachId });
+      this.send("command", { name: "start", clip: this.state.clipId, speed: this.state.rate, coach: this.state.coachId, mirror_ref: this.state.mirrorRef });
     },
 
     reset(name = "reset") {

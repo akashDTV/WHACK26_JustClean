@@ -454,6 +454,32 @@ class PoseDetector:
 # =============================================================================
 # REFERENCE CLIPS
 # =============================================================================
+def _mirror_name(name: str) -> str:
+    """'L forearm' <-> 'R forearm'; 'head' stays 'head'."""
+    if name.startswith("L "):
+        return "R " + name[2:]
+    if name.startswith("R "):
+        return "L " + name[2:]
+    return name
+
+
+def mirror_track(track: "ReferenceTrack") -> "ReferenceTrack":
+    """The reference as if the video were flipped left-to-right (dance it like a mirror).
+
+    Angles are atan2(-dx, dy), so flipping x just negates each angle; the dancer's left
+    and right body parts also swap places."""
+    names = list(SEGMENT_NAMES)
+    src = [names.index(_mirror_name(n)) for n in names]   # where each mirrored value comes from
+    frames = []
+    for row in track.frames:
+        if row is None:
+            frames.append(None)
+            continue
+        frames.append([None if row[j] is None else ((-row[j] + 180.0) % 360.0 - 180.0)
+                       for j in src])
+    return ReferenceTrack(track.fps, frames, track.duration_s)
+
+
 class ReferenceTrack:
     """The reference dancer's segment angles for every frame of a clip."""
 
