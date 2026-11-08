@@ -192,6 +192,7 @@
     start() {
       if (!this.state.clipId || $("start-btn").disabled) return;
       unlockMedia();
+      this.state.cp = null;                     // fresh catchphrase timing for each run
       this.send("command", { name: "start", clip: this.state.clipId, speed: this.state.rate, coach: this.state.coachId });
     },
 
@@ -206,6 +207,28 @@
       v.currentTime = 0;
       this.send("command", { name });
       this.show("chooser");
+    },
+
+    // Coach catchphrase: only once the score has stayed in range for a while, then a cool-down.
+    // Short dips (under grace_s) don't reset the timer, so a jittery score still counts as "staying".
+    checkCatchphrase(score) {
+      const coach = window.coachById(this.state.coachId);
+      const cp = coach.catchphrase;
+      if (!cp || !Number.isFinite(score)) return;
+      const { hold_s, cooldown_s, grace_s = 1 } = window.CATCHPHRASE_TIMING;
+      const now = performance.now() / 1000;
+      const c = this.state.cp || (this.state.cp = { since: null, lastIn: 0, lastPop: -Infinity });
+      const inRange = cp.above != null ? score >= cp.above : score < cp.below;
+      if (inRange) {
+        if (c.since === null || now - c.lastIn > grace_s) c.since = now;
+        c.lastIn = now;
+        if (now - c.since >= hold_s && now - c.lastPop >= cooldown_s) {
+          c.lastPop = now;
+          c.since = null;                        // must stay in range again before the next one
+          showPop(cp.text, { color: coach.color, ms: 1800, catchphrase: true, coach });
+          window.A11Y.announce(`${coach.name}: ${cp.text}`);
+        }
+      }
     },
 
     // Restart the dance from the beginning (stays on the dancing screen).
@@ -270,10 +293,9 @@
           eyeOffIcon(), `Can't see ${String(p).replace(/_/g, " ")}`)));
       }
 
-      // pops: Python can send m.pop; otherwise pop every 5 s of green streak
+      // pops: Python can send m.pop; otherwise the chosen coach's catchphrase
       if (m.pop) showPop(m.pop);
-      else if (streak >= this.state.lastStreakPop + 5) { this.state.lastStreakPop += 5; showPop("CLEAN!"); }
-      if (streak < 1) this.state.lastStreakPop = 0;
+      else this.checkCatchphrase(score);
 
       if (!$("debug").classList.contains("show")) return;
       $("debug-pre").textContent = JSON.stringify(m, null, 1);
@@ -488,16 +510,41 @@
     $("missing-list").dataset.key = "";
     document.body.dataset.band = "none";
     App.state.lastStreakPop = 0;
+    App.state.cp = null;
   }
   function hideOverlays() { $("countdown-overlay").classList.remove("show"); $("banner-overlay").classList.remove("show"); }
   let popTimer = null;
-  function showPop(text) {
+  function showPop(text, opts = {}) {
     const p = $("pop");
-    p.textContent = text;
+    p.classList.toggle("catchphrase", !!opts.catchphrase);
+    if (opts.catchphrase && opts.coach) {
+      // clean badge: small avatar + the word, text colour picked for contrast on the coach colour
+      const av = window.makeAvatar(opts.coach);
+      av.classList.add("pop-avatar");
+      p.replaceChildren(av, el("span", { class: "pop-word", text: text }));
+      p.style.setProperty("--pop-bg", opts.color);
+      p.style.setProperty("--pop-fg", readableOn(opts.color));
+    } else {
+      p.textContent = text;
+    }
+    p.classList.remove("show");
+    void p.offsetWidth;                   // restart the animation
     p.classList.add("show");
     clearTimeout(popTimer);
-    popTimer = setTimeout(() => p.classList.remove("show"), 900);
+    popTimer = setTimeout(() => p.classList.remove("show"), opts.ms || 900);
   }
+
+  // white text, or dark text on very light coach colours
+  function readableOn(hex) {
+    const m = /^#?([0-9a-f]{6})$/i.exec(hex || "");
+    if (!m) return "#fff";
+    const n = parseInt(m[1], 16), ch = [n >> 16, (n >> 8) & 255, n & 255].map((v) => {
+      v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; });
+    const L = 0.2126 * ch[0] + 0.7152 * ch[1] + 0.0722 * ch[2];
+    return L > 0.42 ? "#14121F" : "#fff";      // white looks cleaner on strong colours
+  }
+
+
   function eyeOffIcon() {
     const ns = "http://www.w3.org/2000/svg";
     const svg = document.createElementNS(ns, "svg");
