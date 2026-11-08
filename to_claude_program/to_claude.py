@@ -29,8 +29,9 @@ Used from main.py:
     to_claude(PARAMS, COMPARISON, PERSONALITY)
 
 Setup:
-    pip install anthropic
-    export ANTHROPIC_API_KEY=...
+    pip install anthropic python-dotenv
+    put ANTHROPIC_API_KEY=... in the repo's .env file (see .env.example),
+    or export ANTHROPIC_API_KEY=... in your terminal
 """
 
 import json
@@ -38,6 +39,14 @@ import os
 import re
 import sys
 from pathlib import Path
+
+REPO_DIR = Path(__file__).resolve().parent.parent
+
+try:  # read ANTHROPIC_API_KEY from the repo's .env, whichever folder you run from
+    from dotenv import load_dotenv
+    load_dotenv(REPO_DIR / ".env")
+except ImportError:
+    pass
 
 # --------------------------------------------------------------------------
 # Config

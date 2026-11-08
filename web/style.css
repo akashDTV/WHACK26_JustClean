@@ -462,3 +462,23 @@ h1[tabindex="-1"]:focus { outline: none; }
 .rename-input { font: inherit; font-size: var(--fs-lg); font-weight: 600; color: var(--text); background: var(--surface-2); border: 1px solid var(--accent-soft); border-radius: var(--radius-sm); padding: 8px 10px; }
 .clip-confirm span { font-weight: 600; }
 .btn-danger { background: var(--red); color: #fff; border: none; font-weight: 700; }
+
+/* Coach catchphrase pop: a clean badge in the coach's colour */
+.pop.catchphrase {
+  top: 20%; transform: translate(-50%, -50%) scale(0.9);
+  display: inline-flex; align-items: center; gap: 14px;
+  padding: 12px 30px 12px 12px; border-radius: 999px;
+  background: var(--pop-bg); color: var(--pop-fg);
+  font-family: var(--font-display); font-size: 40px; font-weight: 700; letter-spacing: -0.5px;
+  white-space: nowrap; text-shadow: 0 1px 2px rgba(0,0,0,0.18);
+  box-shadow: 0 12px 40px rgba(0,0,0,0.45), 0 0 0 1px rgba(255,255,255,0.12) inset;
+  transition: opacity 250ms ease, transform 250ms ease;
+}
+.pop.catchphrase.show { opacity: 1; animation: popIn 380ms cubic-bezier(.2,.9,.3,1.2) both; }
+.pop.catchphrase .pop-avatar { width: 52px; height: 52px; border: 2px solid rgba(255,255,255,0.85); flex: none; }
+@keyframes popIn {
+  from { opacity: 0; transform: translate(-50%, -40%) scale(0.85); }
+  to   { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+}
+@media (max-width: 900px) { .pop.catchphrase { font-size: 28px; } .pop.catchphrase .pop-avatar { width: 40px; height: 40px; } }
+@media (prefers-reduced-motion: reduce) { .pop.catchphrase.show { animation: none; transform: translate(-50%, -50%); } }

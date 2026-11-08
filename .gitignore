@@ -7,3 +7,6 @@ __pycache__/
 data/runs/
 *.avi
 .pytest_cache/
+data/uploads/
+data/clips/_deleted/
+data/clips/clips.json
