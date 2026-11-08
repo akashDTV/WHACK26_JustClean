@@ -6,7 +6,7 @@
   <title>JustClean</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="style.css?v=20261108d">
+  <link rel="stylesheet" href="style.css">
 
   <!-- Calibration screen layout. The dashed box is a frame AROUND the camera picture:
        - the picture is shrink-wrapped, so the frame always hugs it exactly (16:9, 4:3, ...)
@@ -125,6 +125,7 @@
   <section id="screen-chooser" class="screen" aria-labelledby="chooser-h">
     <header class="topbar">
       <h1 id="chooser-h" class="brand"><span class="brand-just">Just</span><span class="brand-clean">Clean</span></h1>
+      <span class="muted">Video stays on this laptop · only a score summary goes to Claude</span>
     </header>
 
     <div class="step">
@@ -159,9 +160,6 @@
         <span class="speed-end" aria-hidden="true" id="speed-max-label"></span>
         <output id="speed-value" for="speed-slider" class="speed-value">1×</output>
         <button class="btn btn-ghost" id="speed-reset" type="button">Reset to 1×</button>
-      </div>
-      <div class="mirror-row">
-        <button class="btn btn-ghost" id="mirror-ref-btn" type="button" aria-pressed="false">Mirror the dancer: off</button>
       </div>
     </div>
 
@@ -348,13 +346,13 @@
   <div class="debug" id="debug" aria-hidden="true"><pre id="debug-pre">debug</pre></div>
 
   <!-- Order matters: config → helpers → features → app → transport -->
-  <script src="js/coaches.js?v=20261108d"></script>
-  <script src="js/a11y.js?v=20261108d"></script>
-  <script src="js/speech.js?v=20261108d"></script>
-  <script src="js/typer.js?v=20261108d"></script>
-  <script src="js/report.js?v=20261108d"></script>
-  <script src="js/app.js?v=20261108d"></script>
-  <script src="js/ws.js?v=20261108d"></script>
-  <script src="js/fake.js?v=20261108d"></script>
+  <script src="js/coaches.js"></script>
+  <script src="js/a11y.js"></script>
+  <script src="js/speech.js"></script>
+  <script src="js/typer.js"></script>
+  <script src="js/report.js"></script>
+  <script src="js/app.js"></script>
+  <script src="js/ws.js"></script>
+  <script src="js/fake.js"></script>
 </body>
 </html>
