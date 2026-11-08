@@ -42,23 +42,55 @@
     lastPanel: null,
 
     // Text the coach speaks (also the caption)
-    speechFor(feedback) {
+    // The caption pieces, in speaking order. Joined with spaces they are exactly what the coach says.
+    captionParts(feedback) {
       const parts = [feedback.headline, feedback.score_summary];
       const fix = (feedback.priority_fixes || [])[0];
       if (fix) parts.push(`${fix.what_happened} ${fix.drill}`);
-      return parts.filter(Boolean).join(" ");
+      return parts.filter(Boolean);
     },
+
+    speechFor(feedback) {
+      return this.captionParts(feedback).join(" ");
+    },
+
+    // ---- typing captions (kept in step with the voice) ----
+    typers: {},                      // tag -> Typer ("report" or a coach id on the panel)
+
+    makeReportTyper(fb) {
+      const [head, ...rest] = this.captionParts(fb);
+      const more = rest.map(() => el("p"));
+      document.getElementById("rep-caption-more").replaceChildren(...more);
+      const segs = [{ el: document.getElementById("rep-caption"), text: head || "" }]
+        .concat(rest.map((text, i) => ({ el: more[i], text })));
+      if (this.typers.report) this.typers.report.stop();
+      this.typers.report = new window.Typer(segs);
+    },
+
+    onSpeechStart(item) {
+      if (item.tag === "report" && this.last) this.makeReportTyper(this.last.feedback || {});
+      const t = this.typers[item.tag];
+      if (t) {
+        if (item.tag !== "report") { t.pos = t.target = 0; t.synced = false; t.finishing = false; t.render(); }
+        t.start(item.coach && item.coach.voice ? item.coach.voice.rate : 1);
+      }
+    },
+    onSpeechWord(item, i, len) { const t = this.typers[item.tag]; if (t) t.word(i, len); },
+    onSpeechEnd(item) { const t = this.typers[item.tag]; if (t) t.finish(); },
+    revealAllTyping() { Object.values(this.typers).forEach((t) => t.revealAll()); },
 
     render(msg) {
       this.last = msg;
       const fb = msg.feedback || {};
       const det = msg.details || {};
       const coach = window.coachById(msg.coach_id);
+      window.Speech.addAudio(fb.audio);   // this coach's ElevenLabs voice, played when speechFor(fb) is spoken
 
       // coach strip
       window.fillAvatar(document.getElementById("rep-avatar"), coach);
       document.getElementById("rep-speaking").textContent = `${coach.name} · ${coach.role}`;
-      document.getElementById("rep-caption").textContent = fb.headline || "";
+      // big one-liner, then the rest in smaller paragraphs, typed as the coach speaks
+      this.makeReportTyper(fb);
 
       // overall
       document.getElementById("rep-overall").textContent = fmt(fb.overall_score);
@@ -66,7 +98,7 @@
       const meta = [];
       if (dq.tracked_frame_percentage != null) meta.push(`${dq.tracked_frame_percentage}% of frames tracked`);
       meta.push(`${det.playback_rate || 1}× speed`);
-      document.getElementById("rep-meta").textContent = meta.join(" · ");
+      document.getElementById("rep-meta").textContent = "";   // tracking % and speed live in the breakdown
       document.getElementById("rep-summary").textContent = fb.score_summary || "";
 
       // components
@@ -80,19 +112,10 @@
           el("span", { class: "comp-summary", text: c.summary || "" }))
       ));
 
-      // body parts — lowest score first, unavailable last
-      const parts = (fb.body_part_feedback || []).slice().sort((a, b) => {
-        if (a.score == null) return 1;
-        if (b.score == null) return -1;
-        return a.score - b.score;
-      });
-      document.getElementById("rep-parts").replaceChildren(...parts.map((p) =>
-        el("div", { class: "part-row" },
-          el("span", { class: "part-name", text: prettyPart(p.body_part) }),
-          el("div", { class: "part-track", "aria-hidden": "true" },
-            el("div", { class: "part-fill", "data-band": band(p.score), style: `width:${p.score || 0}%` })),
-          el("span", { class: "part-val", text: p.score == null ? "Unavailable" : `${p.score} / 100` }))
-      ));
+      // body parts: filter control (max 4 when sorted, or the ones you choose)
+      this.parts = fb.body_part_feedback || [];
+      this.picked = null;
+      this.toggleFilter(false);          // each new report starts on the default view
 
       // priority fixes
       const fixes = fb.priority_fixes || [];
@@ -102,9 +125,8 @@
             el("span", { class: "fix-rank", text: f.rank }),
             el("div", { style: "display:flex; flex-direction:column; gap:2px" },
               el("span", { class: "fix-title", text: f.title }),
-              el("span", { class: "muted", style: "font-size: var(--fs-sm)", text: `Section ${f.section} · ${f.timestamp_s} s` }))),
+              el("span", { class: "muted", style: "font-size: var(--fs-sm)", text: f.evidence || `Section ${f.section}` }))),
           el("span", { style: "color: var(--text-soft)", text: f.what_happened }),
-          el("span", { class: "muted", style: "font-size: var(--fs-sm)", text: f.evidence }),
           el("div", { class: "drill" }, el("strong", { text: "Drill: " }), f.drill))
       ) : [el("p", { class: "muted", text: "No clear issues to fix — nice work." })]));
 
@@ -123,6 +145,69 @@
       );
 
       this.renderBreakdown(fb, det);
+    },
+
+    // ---- body parts filter ----
+    partsMode: "low",          // "low" (needs most work) | "high" (best first) | "pick"
+    picked: null,              // Set of body_part keys chosen in "pick" mode
+    MAX_PARTS: 4,
+
+    MODE_LABELS: { low: "lowest first", high: "highest first", pick: "your choice" },
+
+    setPartsMode(mode) {
+      this.partsMode = mode;
+      document.querySelectorAll("#parts-mode .seg-btn").forEach((b) =>
+        b.setAttribute("aria-pressed", String(b.dataset.mode === mode)));
+      document.getElementById("parts-mode-label").textContent = this.MODE_LABELS[mode];
+      this.renderParts();
+    },
+
+    // Filter options are hidden until the little filter button is clicked.
+    // Closed = default view: lowest scores first, max 4.
+    toggleFilter(open) {
+      const btn = document.getElementById("parts-filter-btn");
+      const panel = document.getElementById("parts-filter");
+      open = open === undefined ? btn.getAttribute("aria-expanded") !== "true" : open;
+      btn.setAttribute("aria-expanded", String(open));
+      panel.hidden = !open;
+      if (!open) this.setPartsMode("low");
+    },
+
+    renderParts() {
+      const all = this.parts || [];
+      const scored = all.filter((p) => p.score != null);
+      const pickBox = document.getElementById("parts-pick");
+      pickBox.hidden = this.partsMode !== "pick";
+
+      // default selection = the 4 that need most work
+      const keys = new Set(all.map((p) => p.body_part));
+      if (!this.picked || ![...this.picked].some((k) => keys.has(k))) {
+        this.picked = new Set(scored.slice().sort((a, b) => a.score - b.score)
+          .slice(0, this.MAX_PARTS).map((p) => p.body_part));
+      }
+
+      let shown;
+      if (this.partsMode === "pick") {
+        pickBox.replaceChildren(...all.map((p) => {
+          const id = `pick-${p.body_part}`;
+          const box = el("input", { type: "checkbox", id, class: "sr-only",
+            onchange: (e) => { e.target.checked ? this.picked.add(p.body_part) : this.picked.delete(p.body_part); this.renderParts(); } });
+          box.checked = this.picked.has(p.body_part);
+          return el("span", { class: "pick-chip" }, box, el("label", { for: id, text: prettyPart(p.body_part) }));
+        }));
+        shown = all.filter((p) => this.picked.has(p.body_part));     // all selected, no limit
+      } else {
+        const dir = this.partsMode === "high" ? -1 : 1;
+        shown = scored.slice().sort((a, b) => dir * (a.score - b.score)).slice(0, this.MAX_PARTS);
+      }
+
+      document.getElementById("rep-parts").replaceChildren(...(shown.length ? shown.map((p) =>
+        el("div", { class: "part-row" },
+          el("span", { class: "part-name", text: prettyPart(p.body_part) }),
+          el("div", { class: "part-track", "aria-hidden": "true" },
+            el("div", { class: "part-fill", "data-band": band(p.score), style: `width:${p.score || 0}%` })),
+          el("span", { class: "part-val", text: p.score == null ? "Unavailable" : `${p.score} / 100` }))
+      ) : [el("p", { class: "muted", style: "margin:0", text: this.partsMode === "pick" ? "Pick body parts above to see them here." : "No body part scores yet." })]));
     },
 
     renderBreakdown(fb, det) {
@@ -163,6 +248,15 @@
               el("td", { text: fmt(s.mean_angle_error_deg, "°") }),
               el("td", { text: s.arrival_offset_ms == null ? "Unavailable" : `${s.arrival_offset_ms > 0 ? "+" : ""}${s.arrival_offset_ms} ms` }),
               el("td", { text: s.confidence == null ? "–" : `${Math.round(s.confidence * 100)}%` }))))))));
+      }
+
+      // 2b. coach's notes per section (from Claude, via to_claude.py)
+      const notes = fb.section_notes || [];
+      if (notes.length) {
+        blocks.push(el("div", {},
+          el("h3", { text: "Coach's notes by section" }),
+          el("ul", { style: "margin:0; padding-left:20px; display:flex; flex-direction:column; gap:8px" },
+            ...notes.map((n) => el("li", {}, el("strong", { text: `Section ${n.section}: ` }), n.note)))));
       }
 
       // 3. every body part with evidence
@@ -235,17 +329,24 @@
               el("span", { class: "coach-name", text: coach.name }),
               el("span", { class: "muted", style: "font-size: var(--fs-sm)", text: coach.role }))),
           el("span", { class: "speaking-pill", hidden: "", text: "Speaking now" }),
-          el("p", { class: "panel-headline", style: "margin:0", text: `“${fb.headline || ""}”` }),
+          el("p", { class: "panel-headline", style: "margin:0" }, "“", el("span", { class: "panel-quote" }), "”"),
           fix ? el("div", { class: "drill" },
             el("span", { class: "label", style: "color: var(--accent-soft); display:block; margin-bottom:4px", text: "#1 fix" }),
             fix.drill) : "",
           el("button", { class: "btn btn-ghost", onclick: () => this.speakPanel([{ coach, fb }]), text: `Play ${coach.name}` }));
       }));
+      // set up a typer per coach card (empty until that coach speaks)
+      Object.keys(this.typers).forEach((k) => { if (k !== "report") { this.typers[k].stop(); delete this.typers[k]; } });
+      items.forEach(({ coach, fb }) => {
+        const span = grid.querySelector(`.panel-card[data-coach="${coach.id}"] .panel-quote`);
+        if (span) this.typers[coach.id] = new window.Typer([{ el: span, text: fb.headline || "" }]);
+      });
       this.speakPanel(items);
     },
 
     speakPanel(items) {
-      window.Speech.speakAll(items.map(({ coach, fb }) => ({ text: fb.headline || "", coach, tag: coach.id })));
+      // fb.audio = that coach's ElevenLabs clip of the headline (browser voice if missing)
+      window.Speech.speakAll(items.map(({ coach, fb }) => ({ text: fb.headline || "", coach, tag: coach.id, audio: fb.audio })));
     },
 
     markSpeaking(coachId) {

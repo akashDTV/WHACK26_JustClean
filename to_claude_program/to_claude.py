@@ -29,8 +29,9 @@ Used from main.py:
     to_claude(PARAMS, COMPARISON, PERSONALITY)
 
 Setup:
-    pip install anthropic
-    export ANTHROPIC_API_KEY=...
+    pip install anthropic python-dotenv
+    put ANTHROPIC_API_KEY=... in the repo's .env file (see .env.example),
+    or export ANTHROPIC_API_KEY=... in your terminal
 """
 
 import json
@@ -38,6 +39,14 @@ import os
 import re
 import sys
 from pathlib import Path
+
+REPO_DIR = Path(__file__).resolve().parent.parent
+
+try:  # read ANTHROPIC_API_KEY from the repo's .env, whichever folder you run from
+    from dotenv import load_dotenv
+    load_dotenv(REPO_DIR / ".env")
+except ImportError:
+    pass
 
 # --------------------------------------------------------------------------
 # Config
@@ -146,11 +155,16 @@ def prepare(params, comparison):
     reliable, dropped = [], []
     for i, f in enumerate(findings):
         item = dict(f, finding_id=i)
+        if isinstance(f.get("timestamp_s"), (int, float)):
+            item["time"] = clock(f["timestamp_s"])           # e.g. "0:23", the only form Claude may use
         (reliable if f.get("confidence", 1.0) >= MIN_CONFIDENCE else dropped).append(item)
     payload = {
         "task": "Create concise, actionable dance-coach feedback from measured results.",
         "scores": params.get("scores", {}),
-        "sections": params.get("sections", []),
+        "sections": [dict(sec, time_range=f"{clock(sec['start_s'])} - {clock(sec['end_s'])}")
+                     if isinstance(sec.get("start_s"), (int, float))
+                     and isinstance(sec.get("end_s"), (int, float)) else dict(sec)
+                     for sec in params.get("sections", [])],
         "top_findings": reliable,
         "body_part_scores": get_body_parts(comparison),
         "data_quality": params.get("data_quality", {}),
@@ -181,9 +195,25 @@ def allowed_scores(payload):
 SYSTEM_PROMPT = """You are a dance rehearsal coach. The supplied reference video is the standard.
 Your job is to explain measured differences and give practical rehearsal advice.
 
+HARD RULE - NO NUMBERS (this overrides everything else):
+- Nothing you write may contain a number of any kind: no digits, no scores, no angles, no degrees,
+  no seconds or milliseconds, no percentages, no fractions, no counts.
+- This includes numbers written as words ("two", "fifteen", "half a second", "a quarter turn")
+  and ordinals ("second", "third"): say "the next move", "later", "earlier" instead.
+- Do not use the words degree, percent, second, millisecond or frame at all.
+- There are exactly TWO exceptions:
+  1. a section label written exactly as "Section N" (e.g. "Section 2");
+  2. a timestamp in m:ss form, copied character-for-character from a "time" field on a
+     top_findings entry or from a section's "time_range" (e.g. "around 0:23"). Never work out,
+     round or invent a timestamp, and never use the raw timestamp_s / start_s / end_s values.
+- The input contains numbers so you can judge what matters; translate them into words
+  ("slightly", "quite a lot", "a touch late", "near the end of Section 2"). Never copy them.
+- This applies to every field, including data_caveat. Any sentence containing a number is
+  deleted automatically before the dancer sees it, so a number only wastes your sentence.
+
 STRICT RULES:
 - Return one JSON object matching the schema below, and nothing else (no markdown fences).
-- Never calculate, alter or invent scores. If you quote a score, write it exactly as supplied, as NN/100.
+- Never calculate, alter, invent or quote scores.
 - Only discuss facts present in the input. Do not invent body parts, sections, timestamps or measurements.
 - Do not claim to hear or analyse the music or identify beats. Say "later than the reference", never "missed the beat".
 - Do not call a movement technically wrong; describe how it differs from this reference.
@@ -192,7 +222,7 @@ STRICT RULES:
 - Treat body_part_scores with score null as unavailable; do not guess them.
 - If confidence is low or data is missing, say so in data_caveat and avoid unsupported claims. If there are no reliable findings, return an empty priority_fixes array.
 - Keep everything concise enough for an on-screen results page and to be spoken aloud.
-- Never mention tracking, tracked frames, confidence or whether something was detected, except inside data_caveat.
+- Never mention tracking, confidence or whether something was detected, except inside data_caveat (and even there, in words only, with no numbers).
 - Do not repeat yourself: each section note must say something new and must not restate the joint or measurements already listed for that section.
 - Write overall_summary fully in the personality style given in the input (coach_personality.style_guide): let the tone, word choice and energy clearly reflect the sliders. Do NOT include any score or number in overall_summary (the scores are shown elsewhere); describe how the run went in words. The priority fixes use the plain-language style described under PRIORITY FIX STYLE below.
 
@@ -200,7 +230,7 @@ PRIORITY FIX STYLE (title, subheading, description, fix, and section notes):
 - Write like a friendly, observant coach talking to the dancer, not like a report. Use "you" and "your", everyday words and short sentences.
 - Lead with what it looked or felt like compared with the reference (e.g. "your left arm stayed a bit curled where the reference opens it out"), not with measurements.
 - Avoid jargon and metric language such as "mean angle difference", "arrival offset", "degrees of error" or "confidence".
-- You may include at most ONE measured figure per fix, only if it helps, phrased naturally (e.g. "about a quarter of a second late"). Never add figures that are not in the input.
+- See the HARD RULE above: no numbers of any kind. Describe size in words ("slightly", "a little", "quite a lot") and how early or late in words ("a touch late", "noticeably late"). To say WHERE something happened you may use a supplied m:ss timestamp ("around 0:23 in Section 2").
 - Say which direction to correct only if the input gives a direction (e.g. "more bent"); otherwise just say what differed.
 - The fix is one concrete, doable drill with a cue the dancer can feel or picture (e.g. "think of reaching out to the side as the reference does"), in a warm, encouraging tone. Not a lecture.
 - Titles are short action phrases a dancer would say, like "Open up your left arm" or "Land the move with the reference".
@@ -212,7 +242,7 @@ SCHEMA:
     {
       "finding_id": <integer copied from a top_findings entry>,
       "title": "short, plain action phrase, e.g. 'Open up your left arm'",
-      "subheading": "one plain line on where it happens, e.g. 'Section 2, about 6 seconds in'",
+      "subheading": "one plain line on where it happens, with the finding's time copied exactly, e.g. 'Section 2, around 0:23'",
       "description": "1-3 conversational sentences on what it looked like compared to the reference",
       "fix": "one specific, friendly drill with a cue the dancer can picture or feel"
     }
@@ -220,12 +250,12 @@ SCHEMA:
   "section_notes": [
     {"section": <integer copied from a supplied sections entry>, "note": "2-3 plain, conversational sentences on how this section went and what it looked like compared to the reference; no scores or numbers"}
   ],
-  "data_caveat": null
+  "data_caveat": "null, or one plain sentence in words only (no numbers) if the data was limited"
 }
 Give one section_notes entry for each supplied section, in order."""
 
 
-def call_claude(payload, personality):
+def call_claude(payload, personality, timeout=None):
     import anthropic  # imported here so --no-api works without the package
 
     message = dict(payload)
@@ -233,7 +263,9 @@ def call_claude(payload, personality):
         "sliders_0_to_1": personality["sliders"],
         "style_guide": describe_personality(personality),
     }
-    client = anthropic.Anthropic(timeout=API_TIMEOUT_S)  # reads ANTHROPIC_API_KEY
+    t = API_TIMEOUT_S if timeout is None else timeout
+    # short budget (live demo): no retries, so the fallback kicks in on time
+    client = anthropic.Anthropic(timeout=t, max_retries=0 if t < 10 else 2)  # reads ANTHROPIC_API_KEY
     resp = client.messages.create(
         model=MODEL,
         max_tokens=MAX_TOKENS,
@@ -269,41 +301,62 @@ TITLES = {
 }
 
 
+def size_words(deg):
+    return "slightly " if deg < 15 else "" if deg < 25 else "quite a bit "
+
+
+def time_words(ms):
+    return "a touch" if ms < 150 else "a little" if ms < 350 else "noticeably"
+
+
 def plain_description(f):
-    """Turn a measured finding into a conversational sentence (template fallback)."""
+    """Turn a measured finding into a conversational sentence, no numbers (template fallback)."""
     bp = pretty(f.get("body_part", "this part"))
     mv = f.get("measured_value", "")
     direction = f.get("direction", "")
-    m_dir = re.match(r"user \w+ (.+)$", direction)
+    m_dir = (re.search(r"\b((?:more|less)\s+\w+)", direction)    # "user more bent" -> "more bent"
+             or re.match(r"user \w+ (.+)$", direction))
     m_deg = re.search(r"(\d+(?:\.\d+)?)\s*degree", mv)
     m_ms = re.search(r"(\d+(?:\.\d+)?)\s*ms (later|longer|earlier)", mv)
     typ = f.get("type", "position")
     if typ == "position" and m_dir:
-        extra = f", by roughly {round(float(m_deg.group(1)))} degrees" if m_deg else ""
-        return f"Your {bp} was {m_dir.group(1)} than the reference{extra}."
+        size = size_words(float(m_deg.group(1))) if m_deg else ""
+        return f"Your {bp} was {size}{m_dir.group(1)} than the reference."
     if typ == "position":
         return f"Your {bp} shape didn't quite match the reference here."
     if m_ms:
-        secs = round(float(m_ms.group(1)) / 1000, 2)
-        word = {"later": "after the reference",
-                "longer": "longer than the reference",
-                "earlier": "earlier than the reference"}[m_ms.group(2)]
+        how = time_words(float(m_ms.group(1)))
         if typ == "timing":
-            return f"Your {bp} reached the position about {secs} seconds {word}."
-        return f"This took about {secs} seconds {word}."
-    return f"Compared with the reference: {mv}." if mv else "This differed from the reference here."
+            word = "before" if m_ms.group(2) == "earlier" else "after"
+            return f"Your {bp} reached the position {how} {word} the reference."
+        if typ == "holds":
+            word = "shorter" if m_ms.group(2) == "earlier" else "longer"
+            return f"You held the pose {how} {word} than the reference."
+        word = {"later": "longer than", "longer": "longer than", "earlier": "quicker than"}[m_ms.group(2)]
+        return f"This took {how} {word} the reference."
+    return "This differed from the reference here."
 
 
-def fix_from_finding(f):
+def where_words(f, sections=()):
+    """'Section 3, near the end' - no times."""
+    s, t = f.get("section", "?"), f.get("timestamp_s")
+    sec = next((x for x in sections if x.get("section") == s), None)
+    if sec and isinstance(t, (int, float)) and "start_s" in sec and "end_s" in sec \
+            and sec["end_s"] > sec["start_s"]:
+        frac = (t - sec["start_s"]) / (sec["end_s"] - sec["start_s"])
+        part = "near the start" if frac < 0.34 else "in the middle" if frac < 0.67 else "near the end"
+        return f"Section {s}, {part} ({clock(t)})"
+    return f"Section {s}" + (f" ({clock(t)})" if isinstance(t, (int, float)) else "")
+
+
+def fix_from_finding(f, sections=()):
     typ = f.get("type", "position")
     bp = pretty(f.get("body_part", "this area"))
     s = f.get("section", "?")
-    t = f.get("timestamp_s")
-    where = f"Section {s}" + (f", about {round(t)} seconds in" if isinstance(t, (int, float)) else "")
     return {
         "finding_id": f["finding_id"],
         "title": TITLES.get(typ, TITLES["position"]).format(bp=bp),
-        "subheading": where,
+        "subheading": where_words(f, sections),
         "description": plain_description(f),
         "fix": DRILLS.get(typ, DRILLS["position"]).format(s=s, bp=bp),
     }
@@ -351,7 +404,8 @@ def canned_response(payload, personality):
         "overall_summary": canned_overall(payload, personality),
         "section_notes": {sec.get("section"): canned_section_note(sec, routine_weakest(payload))
                           for sec in payload["sections"]},
-        "priority_fixes": [fix_from_finding(f) for f in payload["top_findings"][:MAX_FIXES]],
+        "priority_fixes": [fix_from_finding(f, payload["sections"])
+                           for f in payload["top_findings"][:MAX_FIXES]],
         "data_caveat": None,
     }
 
@@ -359,6 +413,47 @@ def canned_response(payload, personality):
 # --------------------------------------------------------------------------
 # Validation
 # --------------------------------------------------------------------------
+
+# HARD RULE: Claude's text may contain no numbers of any kind. The only exception is a
+# "Section N" label. "one", "first", "half" and "quarter" are allowed on their own because
+# they're everyday words ("the left one", "first, ..."), but not next to a unit.
+NUMBER_WORDS = ("zero|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|"
+                "fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|"
+                "fifty|sixty|seventy|eighty|ninety|hundred|thousand|dozen|"
+                "third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|twice|thrice")
+UNIT_WORDS = (r"degrees?|deg|seconds?|secs?|milliseconds?|millisecs?|ms|percent(?:age)?|"
+              r"per\s*cent|minutes?|mins?|frames?|fps")
+MEASURE_RE = re.compile(
+    r"\d|[°%½¼¾⅓⅔]|"
+    rf"\b(?:{NUMBER_WORDS})\b|"
+    rf"\b(?:{UNIT_WORDS})\b",
+    re.I)
+SECTION_LABEL_RE = re.compile(r"\bsections?\s+\d+(?:\s*(?:,|and|&)\s*\d+)*", re.I)
+
+
+TIMESTAMP_RE = re.compile(r"(?<![\d.:])\d{1,2}:\d{2}(?![\d:])")
+
+
+def allowed_times(payload):
+    """Every m:ss timestamp Python supplied; Claude may only use these."""
+    out = {f["time"] for f in payload["top_findings"] if f.get("time")}
+    for sec in payload["sections"]:
+        out.update(t.strip() for t in (sec.get("time_range") or "").split(" - ") if t.strip())
+    return out
+
+
+def has_measure(text, times=()):
+    """True if text has any number, angle, time or unit. Allowed: 'Section 3' labels and
+    m:ss timestamps that Python supplied (an unsupplied timestamp still counts as a number)."""
+    t = SECTION_LABEL_RE.sub("section", text or "")
+    t = TIMESTAMP_RE.sub(lambda m: "timestamp" if m.group(0) in times else m.group(0), t)
+    return bool(MEASURE_RE.search(t))
+
+
+def strip_measure_sentences(text, times=()):
+    sentences = SENTENCE_SPLIT.split((text or "").strip())
+    return " ".join(x for x in sentences if not has_measure(x, times)).strip()
+
 
 SCORE_RE = re.compile(r"(\d+(?:\.\d+)?)\s*(?:/|out of)\s*100")
 SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+(?=[A-Z])")   # won't split inside "6.4 s"
@@ -393,6 +488,7 @@ def validate(resp, payload, personality):
     """Keep what's valid, replace the rest with template text. Never raises."""
     fallback = canned_response(payload, personality)
     allowed = allowed_scores(payload)
+    times = allowed_times(payload)
     by_id = {f["finding_id"]: f for f in payload["top_findings"]}
     problems = []
 
@@ -407,6 +503,9 @@ def validate(resp, payload, personality):
         if not all(text_ok(v, allowed) for v in fields):
             problems.append(f"dropped fix for finding {fid}: missing field or unsupplied score")
             continue
+        if any(has_measure(v, times) for v in fields):
+            problems.append(f"fix for finding {fid} used numbers; used template text for it")
+            fx = fix_from_finding(by_id[fid], payload["sections"])
         seen.add(fid)
         fixes.append(fx)
     fixes = fixes[:MAX_FIXES]
@@ -414,14 +513,18 @@ def validate(resp, payload, personality):
         problems.append("no valid fixes from Claude; used template fixes")
         fixes = fallback["priority_fixes"]
 
+    caveat = resp.get("data_caveat")
+    caveat = strip_measure_sentences(caveat, times) if isinstance(caveat, str) else ""
+    if isinstance(resp.get("data_caveat"), str) and caveat != resp["data_caveat"].strip():
+        problems.append("removed sentence(s) with a number from data_caveat")
     out = {
         "priority_fixes": fixes,
-        "data_caveat": resp.get("data_caveat") if isinstance(resp.get("data_caveat"), str) else None,
+        "data_caveat": caveat or None,
     }
     raw = resp.get("overall_summary")
-    cleaned = strip_score_sentences(raw, allowed) if isinstance(raw, str) else ""
+    cleaned = strip_measure_sentences(strip_score_sentences(raw, allowed), times) if isinstance(raw, str) else ""
     if isinstance(raw, str) and cleaned and cleaned != raw.strip():
-        problems.append("removed sentence(s) that mentioned a score from overall_summary")
+        problems.append("removed sentence(s) with a score or measurement from overall_summary")
     if cleaned:
         out["overall_summary"] = cleaned
     else:
@@ -436,13 +539,44 @@ def validate(resp, payload, personality):
         if sid not in valid_ids or sid in notes or not isinstance(text, str):
             problems.append(f"dropped section note for unknown/duplicate section {sid!r}")
             continue
-        cleaned = strip_score_sentences(text, allowed)
+        cleaned = strip_measure_sentences(strip_score_sentences(text, allowed), times)
         if cleaned:
             notes[sid] = cleaned
     for sid, text in fallback["section_notes"].items():
         notes.setdefault(sid, text)
     out["section_notes"] = notes
     return out, problems
+
+
+GENERIC_SUMMARY = "Good work getting through the routine. Have a look at the fixes below and run it again."
+GENERIC_FIX_TEXT = {"title": "Match the reference", "subheading": "See the breakdown",
+                    "description": "This part looked different from the reference.",
+                    "fix": "Slow this part down, watch the reference, and copy it closely."}
+
+
+def enforce_no_numbers(result, payload):
+    """Final hard gate: no word field leaves here with a number in it, whatever produced it."""
+    by_id = {f["finding_id"]: f for f in payload["top_findings"]}
+    text_keys = ("title", "subheading", "description", "fix")
+    times = allowed_times(payload)
+
+    fixes = []
+    for fx in result.get("priority_fixes") or []:
+        if any(has_measure(fx.get(k), times) for k in text_keys) and fx.get("finding_id") in by_id:
+            fx = fix_from_finding(by_id[fx["finding_id"]], payload["sections"])
+        for k in text_keys:  # last resort if even the template text had a number in it
+            if has_measure(fx.get(k), times):
+                fx = dict(fx, **{k: GENERIC_FIX_TEXT[k]})
+        fixes.append(fx)
+    result["priority_fixes"] = fixes
+
+    summary = strip_measure_sentences(result.get("overall_summary"), times)
+    result["overall_summary"] = summary or GENERIC_SUMMARY
+
+    result["section_notes"] = {sid: strip_measure_sentences(n, times)
+                               for sid, n in (result.get("section_notes") or {}).items()}
+    result["data_caveat"] = strip_measure_sentences(result.get("data_caveat"), times) or None
+    return result
 
 
 # --------------------------------------------------------------------------
@@ -621,8 +755,12 @@ def write_outputs(out_dir, params, payload, dropped, result, personality, source
 # --------------------------------------------------------------------------
 
 
-def to_claude(params, comparison=None, personality=None, out_dir="output", use_api=True):
-    """Make one Claude call and write the three output files. Returns their paths."""
+def debrief(params, comparison=None, personality=None, use_api=True, timeout=None):
+    """Make one Claude call (or the template) and return everything in memory.
+
+    Returns a dict: params, payload, dropped, result, persona, source.
+    result = {overall_summary, priority_fixes, section_notes, data_caveat}.
+    Used by to_claude() (writes files) and web_report.py (sends to the page)."""
     params = _load(params, "params")
     comparison = _load(comparison, "comparison")
     if not isinstance(params, dict) or "scores" not in params:
@@ -633,7 +771,7 @@ def to_claude(params, comparison=None, personality=None, out_dir="output", use_a
     result, source = None, "template fallback"
     if use_api:
         try:
-            raw = call_claude(payload, persona)
+            raw = call_claude(payload, persona, timeout=timeout)
             result, problems = validate(raw, payload, persona)
             source = f"Claude ({MODEL})"
             for p in problems:
@@ -644,4 +782,13 @@ def to_claude(params, comparison=None, personality=None, out_dir="output", use_a
     if result is None:
         result = canned_response(payload, persona)
         result["data_caveat"] = None
-    return write_outputs(out_dir, params, payload, dropped, result, persona, source)
+    result = enforce_no_numbers(result, payload)
+    return {"params": params, "payload": payload, "dropped": dropped,
+            "result": result, "persona": persona, "source": source}
+
+
+def to_claude(params, comparison=None, personality=None, out_dir="output", use_api=True):
+    """Make one Claude call and write the three output files. Returns their paths."""
+    d = debrief(params, comparison, personality, use_api=use_api)
+    return write_outputs(out_dir, d["params"], d["payload"], d["dropped"], d["result"],
+                         d["persona"], d["source"])

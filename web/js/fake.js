@@ -65,13 +65,14 @@
   };
   const feedbackFor = (id) => ({ ...BASE_FEEDBACK, headline: HEADLINES[id] || HEADLINES.hype });
 
-  const CLIPS = [
+  let CLIPS = [
     { id: "clip_a", name: "Demo clip A", duration_s: 16, ref_ok: true, tracked_pct: 98 },
     { id: "clip_b", name: "Demo clip B", duration_s: 20, ref_ok: true, tracked_pct: 96 },
     { id: "clip_c", name: "Shaky test clip", duration_s: 18, ref_ok: false, warning: "Only 71% of frames tracked — pick another clip" }
   ];
 
   let coachId = "hype";
+  let clipId = null;
   let scoreLog = [];
 
   // ---------- the scripted run ----------
@@ -116,7 +117,10 @@
         emit({ type: "banner", text: "Step back into frame" });
         later(2500, () => { emit({ type: "banner", text: "" }); countdownThen(() => dance(8)); });
       }
-      if (t >= 16) { clearAll(); finish(); }
+      const v = document.getElementById("ref-video");
+      const hasVideo = v.currentSrc && Number.isFinite(v.duration);
+      const clip = CLIPS.find((c) => c.id === clipId) || {};
+      if (!hasVideo && t >= (clip.duration_s || 16)) { clearAll(); finish(); }   // no file: use its length
     });
   }
 
@@ -128,13 +132,29 @@
   // ---------- answer commands from the page ----------
   const Fake = {
     send(msg) {
+      if (msg.type === "video_ended") { clearAll(); finish(); return; }   // the real end of the dance
       if (msg.type !== "command") return;
       switch (msg.name) {
         case "choose_coach":
           coachId = msg.value;
           if (msg.rerun_report) emit({ type: "report", coach_id: coachId, feedback: feedbackFor(coachId), details: DETAILS });
           break;
-        case "start": coachId = msg.coach || coachId; run(); break;
+        case "start": coachId = msg.coach || coachId; clipId = msg.clip || clipId; run(); break;
+        case "choose_clip": clipId = msg.value; break;
+        case "rename_clip": {
+          const c = CLIPS.find((x) => x.id === msg.value);
+          if (c) c.name = msg.new_name;
+          emit({ type: "clips", clips: CLIPS });
+          break;
+        }
+        case "delete_clip": {
+          const i = CLIPS.findIndex((x) => x.id === msg.value);
+          if (i >= 0) CLIPS.splice(i, 1);
+          emit({ type: "clips", clips: CLIPS });
+          break;
+        }
+        case "restart":                       // start the dance again from the top
+          clearAll(); scoreLog = []; countdownThen(dance); break;
         case "reset":
         case "try_again": clearAll(); emit({ type: "state", state: "waiting" }); break;
         case "ask_panel":
@@ -147,12 +167,15 @@
     },
 
     upload(file) {
-      const steps = [["Converting video…", 20], ["Tracking the dancer…", 55], ["Checking quality…", 90]];
-      steps.forEach(([stage, percent], i) => setTimeout(() => emit({ type: "upload_progress", stage, percent }), 500 + i * 700));
+      // fake upload progress, then processing stages (percent = processing 0-100)
+      let up = 0;
+      const t = setInterval(() => { up = Math.min(30, up + 3); window.App.setUploadProgress(up, "Uploading…"); if (up >= 30) clearInterval(t); }, 60);
+      const steps = [["Converting video…", 15], ["Converting video…", 35], ["Tracking the dancer…", 55], ["Tracking the dancer…", 80], ["Checking quality…", 92]];
+      steps.forEach(([stage, percent], i) => setTimeout(() => emit({ type: "upload_progress", stage, percent }), 700 + i * 550));
       setTimeout(() => emit({
         type: "upload_result", ok: true, tracked_pct: 94, warnings: [],
-        clip: { id: "upload_1", name: file.name.replace(/\.[^.]+$/, ""), duration_s: 20, ref_ok: true, url: URL.createObjectURL(file) }
-      }), 2800);
+        clip: (() => { const c = { id: `upload_${Date.now()}`, name: file.name.replace(/\.[^.]+$/, ""), ref_ok: true, url: URL.createObjectURL(file) }; CLIPS.push(c); return c; })()
+      }), 3700);
     }
   };
 
