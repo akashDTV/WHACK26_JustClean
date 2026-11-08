@@ -130,9 +130,9 @@
           el("div", { class: "drill" }, el("strong", { text: "Drill: " }), f.drill))
       ) : [el("p", { class: "muted", text: "No clear issues to fix — nice work." })]));
 
-      // caveat
+      // data caveat box: turned off (we don't show tracking-quality notes to the dancer)
       const cav = document.getElementById("rep-caveat");
-      cav.replaceChildren(fb.data_caveat ? el("div", { class: "caveat", role: "note", text: fb.data_caveat }) : "");
+      if (cav) cav.replaceChildren();
 
       // other coaches links
       const others = window.COACHES.filter((c) => c.id !== coach.id);
