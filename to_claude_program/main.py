@@ -11,8 +11,6 @@ Writes exactly three files into the output folder:
     detailed_breakdown.txt  scores by component, section and body part, with short notes
 Output goes to output/ for params.py, and to output/<name>/ for any other file.
 """
-import test2
-
 import argparse
 import importlib
 
@@ -29,7 +27,8 @@ def main():
 
     out_dir = args.out_dir or ("output" if args.module == "params" else f"output/{args.module}")
 
-    result = to_claude(test2.PARAMS, test2.COMPARISON, test2.PERSONALITY,
+    inputs = importlib.import_module(args.module)
+    result = to_claude(inputs.PARAMS, inputs.COMPARISON, inputs.PERSONALITY,
                        out_dir=out_dir, use_api=not args.no_api)
 
     print(f"Done: {args.module} (source: {result['source']})")
