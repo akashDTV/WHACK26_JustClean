@@ -62,15 +62,17 @@ SETUP
     pip install mediapipe opencv-python websockets
 
 (The script still runs without `websockets`; it just skips the bridge.)
-The /scoring package must sit in the folder ABOVE this script (as in Nervin's
-layout: /scoring next to /sandbox).
+Run it from anywhere: every path below is worked out from where this file sits in
+the repo (sandbox/ -> repo root), so it works the same on any machine.
 
 HOW TO RUN (no terminal needed)
 -------------------------------
-1. Put your reference video (.mp4) in the same folder as this script.
-2. Set REFERENCE_VIDEO in the CONFIG section below to the file name
-   (or a full path, e.g. "C:/Users/me/Videos/pose.mp4" - use forward slashes).
-3. Run the script from your editor (IDLE, Spyder, PyCharm, VS Code "Run" ...).
+1. By default it uses the sample clip in TestCode/reference.mp4.
+2. To use your own, set REFERENCE_VIDEO in the CONFIG section below. A relative
+   name is looked for next to this script, then from the repo root, then in
+   data/ref/ - so "my_dance.mp4" in data/ref/ just works. A full path works too.
+3. Run the script from your editor (IDLE, Spyder, PyCharm, VS Code "Run" ...),
+   or from a terminal:  python sandbox/pose_webcam.py
    From a Jupyter notebook or Python prompt instead:
        import pose_webcam
        pose_webcam.main()                  # uses REFERENCE_VIDEO
@@ -129,11 +131,11 @@ try:
 except NameError:
     BASE_DIR = os.getcwd()
 
-# The scoring code lives in /scoring, one folder up from this script. Make that
-# folder importable so "import scoring" works wherever you run from.
-_PARENT_DIR = os.path.dirname(BASE_DIR)
-if _PARENT_DIR not in sys.path:
-    sys.path.insert(0, _PARENT_DIR)
+# The repo root is the folder above sandbox/. Everything else (scoring/, models/,
+# web/, data/, TestCode/) is found from here, so no path depends on your machine.
+REPO_DIR = os.path.dirname(BASE_DIR)
+if REPO_DIR not in sys.path:
+    sys.path.insert(0, REPO_DIR)           # so "import scoring" works from anywhere
 
 from scoring import (  # noqa: E402
     BalanceBar, RunRecorder, ScoreSmoother, balance_band, color_for_score, compare,
@@ -145,8 +147,9 @@ from scoring.config import COLOR_BAD, COLOR_GOOD  # noqa: E402
 # =============================================================================
 # CONFIG
 # =============================================================================
-REFERENCE_VIDEO = "reference.mp4"  # <-- your reference video: file name (next to this
-                                   #     script) or a full path
+REFERENCE_VIDEO = "TestCode/reference.mp4"  # <-- your reference video. Relative names are
+                                            #     looked up next to this script, then from
+                                            #     the repo root, then in data/ref/.
 PLAYBACK_SPEED = 1.0      # STARTING speed of the reference video: 1.0 = normal,
                           # 0.5 = half speed, 2.0 = double. Must be > 0.
                           # While running, the web page's speed slider changes it.
@@ -203,9 +206,8 @@ WS_SEND_INTERVAL = 0.1    # seconds between score messages (10 per second)
 # so the "Upload your own clip" card works. Open http://localhost:HTTP_PORT
 HTTP_HOST = "localhost"   # use "0.0.0.0" to reach the page from another device
 HTTP_PORT = 8000
-WEB_DIR = None            # folder containing index.html; None = auto-find it (next to
-                          # this script, ./web, or ../web)
-UPLOAD_DIR = "uploads"    # uploaded clips are saved here (next to this script)
+WEB_DIR = None            # folder containing index.html; None = the repo's web/ folder
+UPLOAD_DIR = os.path.join(REPO_DIR, "data", "uploads")  # uploaded clips are saved here
 MAX_UPLOAD_MB = 200
 WAIT_FOR_PAGE_START = True  # True: the reference waits (paused) until you press
                             # "Start dancing" on the page. If no page is
@@ -217,7 +219,8 @@ MAX_SPEED = 4.0
 # =============================================================================
 # MODEL
 # =============================================================================
-MODEL_PATH = os.path.join(BASE_DIR, f"pose_landmarker_{MODEL_VARIANT}.task")
+MODEL_DIR = os.path.join(REPO_DIR, "models")   # downloaded here automatically if missing
+MODEL_PATH = os.path.join(MODEL_DIR, f"pose_landmarker_{MODEL_VARIANT}.task")
 MODEL_URL = (
     "https://storage.googleapis.com/mediapipe-models/pose_landmarker/"
     f"pose_landmarker_{MODEL_VARIANT}/float16/latest/"
@@ -591,7 +594,7 @@ def process_upload(bridge, filename, raw):
         if ext not in ALLOWED_EXTENSIONS:
             ext = ".mp4"
         clip_id = "upload-" + uuid.uuid4().hex[:8]
-        folder = os.path.join(BASE_DIR, UPLOAD_DIR)
+        folder = UPLOAD_DIR
         os.makedirs(folder, exist_ok=True)
         path = os.path.join(folder, clip_id + ext)
         with open(path, "wb") as f:
@@ -730,15 +733,11 @@ def make_handler(bridge, web_dir):
 
 
 def find_web_dir():
-    """Folder with index.html: WEB_DIR if set, else look next to the script,
-    in a 'web' folder next to it, and in a 'web' folder one level up."""
-    if WEB_DIR:
-        candidates = [WEB_DIR]
-    else:
-        candidates = [BASE_DIR, os.path.join(BASE_DIR, "web"),
-                      os.path.join(BASE_DIR, "..", "web")]
+    """Folder with index.html: WEB_DIR if set (relative = from the repo root),
+    else the repo's web/ folder."""
+    candidates = [WEB_DIR] if WEB_DIR else [os.path.join(REPO_DIR, "web")]
     for c in candidates:
-        c = c if os.path.isabs(c) else os.path.join(BASE_DIR, c)
+        c = c if os.path.isabs(c) else os.path.join(REPO_DIR, c)
         if os.path.exists(os.path.join(c, "index.html")):
             return os.path.abspath(c)
     return None
@@ -748,7 +747,7 @@ def start_web_server(bridge):
     web_dir = find_web_dir()
     if not web_dir:
         print("Web page off: couldn't find index.html. Set WEB_DIR at the top "
-              "to the folder that contains it (e.g. \"../web\").")
+              "to the folder that contains it.")
         return
     try:
         server = ThreadingHTTPServer((HTTP_HOST, HTTP_PORT),
@@ -766,18 +765,23 @@ def start_web_server(bridge):
 # =============================================================================
 def ensure_model():
     if not os.path.exists(MODEL_PATH):
+        os.makedirs(MODEL_DIR, exist_ok=True)
         print(f"Downloading {os.path.basename(MODEL_PATH)} ...")
         urllib.request.urlretrieve(MODEL_URL, MODEL_PATH)
         print("Done.")
 
 
 def resolve_path(path):
-    """Relative paths are looked for next to this script first."""
-    if not os.path.isabs(path):
-        candidate = os.path.join(BASE_DIR, path)
+    """Relative paths are looked for next to this script, then from the repo
+    root, then in data/ref/ - so the same setting works on every machine."""
+    path = os.path.expanduser(path)
+    if os.path.isabs(path):
+        return path
+    for folder in (BASE_DIR, REPO_DIR, os.path.join(REPO_DIR, "data", "ref")):
+        candidate = os.path.join(folder, path)
         if os.path.exists(candidate):
             return candidate
-    return path
+    return path   # last resort: relative to the current folder
 
 
 # =============================================================================
@@ -983,7 +987,7 @@ def main(video_path=None):
     try:
         data, ref_fps = analyse_reference(path)
     except ReferenceVideoError as e:
-        sys.exit(f"{e}\nCheck REFERENCE_VIDEO at the top of the script.")
+        sys.exit(f"{e}\nCheck REFERENCE_VIDEO at the top of sandbox/pose_webcam.py.")
     player = ReferencePlayer(path, data, ref_fps, PLAYBACK_SPEED)
     current_clip = "reference"   # id of the clip the player is showing
 

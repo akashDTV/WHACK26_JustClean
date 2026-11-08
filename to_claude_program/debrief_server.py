@@ -6,6 +6,8 @@ debrief_server.py - serve web/, play a practice dance, and send real Claude debr
     python debrief_server.py test1 --no-api  # template debrief, no Claude call
     open http://localhost:8000
 
+Works from any folder (e.g. python to_claude_program/debrief_server.py from the repo root).
+
 Clips live in data/clips/ (next to web/). Drop videos in there or upload them from the page.
 Names you give clips are saved in data/clips/clips.json. Deleted clips are moved to
 data/clips/_deleted/ (not destroyed), so a mistake can be undone by moving the file back.
@@ -20,9 +22,11 @@ For the real server (person C): when the dance ends, call
 Never call report_message directly inside async code: it blocks while Claude answers.
 """
 
-try:                                   # read ANTHROPIC_API_KEY from a .env file if there is one
+from pathlib import Path
+
+try:                                   # read ANTHROPIC_API_KEY from the repo's .env if there is one
     from dotenv import load_dotenv
-    load_dotenv()
+    load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 except ImportError:
     pass
 
@@ -34,7 +38,6 @@ import os
 import random
 import re
 import shutil
-from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI, File, UploadFile, WebSocket, WebSocketDisconnect
