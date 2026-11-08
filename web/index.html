@@ -7,6 +7,91 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css">
+
+  <!-- Calibration screen layout. The dashed box is a frame AROUND the camera picture:
+       - the picture is shrink-wrapped, so the frame always hugs it exactly (16:9, 4:3, ...)
+       - it can never be stretched taller than the picture by a grid/flex row
+       - its height is capped to what's left of the window (app.js sets --calib-max-h),
+         so the whole thing fits without scrolling
+       Colours come from your style.css variables (--accent-soft, --green) with fallbacks;
+       app.js toggles .ok on .calib-box when you're standing correctly.
+       (Move this block into style.css if you prefer.) -->
+  <style id="calibration-layout">
+    :root { --calib-pad: 12px; }
+
+    /* picture on the left, checklist on the right */
+    #screen-calibrating .calib-wrap {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(240px, 340px);
+      gap: 28px;
+      align-items: center;
+      height: auto;
+      min-height: 0;
+    }
+    @media (max-width: 900px) {
+      #screen-calibrating .calib-wrap { grid-template-columns: minmax(0, 1fr); }
+    }
+
+    /* the frame: hugs the picture, with a little breathing room inside the dashes */
+    #screen-calibrating .calib-cam.media {
+      position: relative;
+      display: block;
+      box-sizing: border-box;
+      width: fit-content;
+      max-width: 100%;
+      height: fit-content;           /* NOT auto: auto would stretch to the row height */
+      min-height: 0;
+      max-height: none;
+      aspect-ratio: auto;
+      margin: 0;
+      justify-self: center;
+      align-self: center;
+      padding: var(--calib-pad);
+      overflow: hidden;
+      border-radius: 22px;
+    }
+    /* before the first frame arrives: a sensible size so the placeholder has room */
+    #screen-calibrating .calib-cam:not(.has-image) { min-width: min(100%, 560px); min-height: 320px; }
+    #screen-calibrating .calib-cam:not(.has-image) .cam-feed { position: absolute; visibility: hidden; }
+
+    /* once the picture is live it decides the size of the frame */
+    #screen-calibrating .calib-cam.has-image .cam-feed {
+      position: static;
+      display: block;
+      width: auto;
+      height: auto;
+      max-width: 100%;
+      max-height: calc(var(--calib-max-h, 70vh) - 2 * var(--calib-pad));
+      object-fit: contain;
+      transform: none;
+      border-radius: 12px;
+    }
+
+    /* the dashed line, drawn over the whole frame */
+    #screen-calibrating .calib-cam .calib-box {
+      position: absolute;
+      inset: 0;
+      width: auto;
+      height: auto;
+      min-width: 0;
+      min-height: 0;
+      max-width: none;
+      max-height: none;
+      margin: 0;
+      transform: none;
+      aspect-ratio: auto;
+      box-sizing: border-box;
+      pointer-events: none;
+      background: none;
+      border: 3px dashed var(--accent-soft, #a79bff);
+      border-radius: 22px;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+    #screen-calibrating .calib-cam .calib-box.ok {
+      border-color: var(--green, #2ecc71);
+      box-shadow: 0 0 24px rgba(46, 204, 113, 0.35);
+    }
+  </style>
 </head>
 <body data-band="none" data-screen="loading">
 
