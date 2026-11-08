@@ -90,28 +90,39 @@ CALIB_HOLD_SECONDS = 2.0          # how long you must hold still before the coun
 # Each band covers a range of angle differences (degrees). At the START of the
 # band you get *_SCORE_HIGH points, at the END *_SCORE_LOW, falling linearly.
 
-# Band 1: 0 -> 20 degrees difference  =>  100 -> 60 points
+# Dead zone: 0 -> DEADZONE_DEG degrees difference  =>  100 points. The webcam's pose
+# tracking wobbles by about this much even when you copy the reference perfectly, so
+# without it a perfect dance could never reach 100.
+DEADZONE_DEG = 8
+
+# Band 1: DEADZONE_DEG -> 20 degrees difference  =>  100 -> 60 points
 BAND1_MAX_DIFF = 20
 BAND1_SCORE_HIGH = 100
 BAND1_SCORE_LOW = 60
 
-# Band 2: 20 -> 40 degrees difference  =>  59 -> 20 points
-BAND2_MAX_DIFF = 40
+# Band 2: 20 -> 35 degrees difference  =>  59 -> 20 points  (was 20 -> 40)
+BAND2_MAX_DIFF = 35
 BAND2_SCORE_HIGH = 59
 BAND2_SCORE_LOW = 20
 
-# Band 3: 40 -> BAND3_MAX_DIFF degrees difference  =>  19 -> 0 points
-# (BAND3_MAX_DIFF = 60 is an assumption; beyond it the score stays at 0)
-BAND3_MAX_DIFF = 60
+# Band 3: 35 -> BAND3_MAX_DIFF degrees difference  =>  19 -> 0 points (was 40 -> 60)
+BAND3_MAX_DIFF = 50
 BAND3_SCORE_HIGH = 19
 BAND3_SCORE_LOW = 0
 
 # (start_diff, end_diff, score_at_start, score_at_end) for each band
 SCORE_BANDS = [
-    (0,              BAND1_MAX_DIFF, BAND1_SCORE_HIGH, BAND1_SCORE_LOW),
+    (0,              DEADZONE_DEG,   BAND1_SCORE_HIGH, BAND1_SCORE_HIGH),
+    (DEADZONE_DEG,   BAND1_MAX_DIFF, BAND1_SCORE_HIGH, BAND1_SCORE_LOW),
     (BAND1_MAX_DIFF, BAND2_MAX_DIFF, BAND2_SCORE_HIGH, BAND2_SCORE_LOW),
     (BAND2_MAX_DIFF, BAND3_MAX_DIFF, BAND3_SCORE_HIGH, BAND3_SCORE_LOW),
 ]
+
+# OVERALL per frame: half the plain average of the body parts, half the average of the
+# WORST third. Otherwise body parts that barely move (legs, torso, head in most moves)
+# score ~95 and hide a badly wrong arm, so the score could never go really low.
+WORST_SHARE = 1 / 3      # how many body parts count as "the worst" (a third of them)
+WORST_WEIGHT = 0.5       # 0 = plain average (old behaviour), 1 = only the worst parts
 
 # The website's three colours. A score is "green" at/above GREEN_MIN_SCORE,
 # "amber" at/above AMBER_MIN_SCORE, otherwise "red".
@@ -307,9 +318,17 @@ def compare(live_angles: dict, ref_angles: dict) -> dict:
 
 
 def overall_score(results: dict) -> Optional[float]:
-    """Average score of all segments that could be compared (None if none)."""
-    scores = [r["score"] for r in results.values() if r is not None]
-    return sum(scores) / len(scores) if scores else None
+    """Score for the whole body this frame (None if nothing could be compared).
+
+    Half the plain average of the body parts, half the average of the worst third
+    (WORST_WEIGHT / WORST_SHARE), so one badly wrong limb really shows."""
+    scores = sorted(r["score"] for r in results.values() if r is not None)
+    if not scores:
+        return None
+    k = max(1, round(len(scores) * WORST_SHARE))
+    mean = sum(scores) / len(scores)
+    worst = sum(scores[:k]) / k
+    return (1 - WORST_WEIGHT) * mean + WORST_WEIGHT * worst
 
 
 # =============================================================================

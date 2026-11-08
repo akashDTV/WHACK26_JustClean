@@ -16,6 +16,28 @@ window.Speech = {
   audioByText: new Map(),   // normalised text -> {mime, b64, voice}
   current: null,            // the <audio> element playing now, if any
 
+  // Safari only lets audio play if it starts from a click. The coach speaks seconds after the
+  // dance ends (once Claude + ElevenLabs answer), so we "unlock" ONE audio player and the
+  // browser voice on the user's first click/tap/key, then reuse that player for every clip.
+  player: null,
+  unlocked: false,
+  unlock() {
+    if (this.unlocked) return;
+    this.unlocked = true;
+    try {
+      this.player = this.player || new Audio();
+      this.player.muted = true;
+      this.player.src = "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=";
+      const p = this.player.play();
+      if (p && p.catch) p.catch(() => {});
+      this.player.pause();
+      this.player.muted = false;
+    } catch (e) { /* no audio element: browser voice only */ }
+    try {   // wake up the browser voice too (Safari needs this inside a click as well)
+      if (this.available()) { const u = new SpeechSynthesisUtterance(" "); u.volume = 0; speechSynthesis.speak(u); }
+    } catch (e) {}
+  },
+
   available() { return "speechSynthesis" in window; },
 
   _key(text) { return String(text || "").replace(/\s+/g, " ").trim(); },
@@ -54,7 +76,11 @@ window.Speech = {
 
   // ---- ElevenLabs clip ----
   _playClip(item, clip, gen) {
-    const audio = new Audio(`data:${clip.mime || "audio/mpeg"};base64,${clip.b64}`);
+    const audio = this.player || new Audio();     // reuse the unlocked player (Safari)
+    this.player = audio;
+    audio.muted = false;
+    audio.src = `data:${clip.mime || "audio/mpeg"};base64,${clip.b64}`;
+    audio.currentTime = 0;
     this.current = audio;
 
     // The mp3 has no word events, so estimate them from playback progress
@@ -117,3 +143,7 @@ window.Speech = {
     if (this.available()) speechSynthesis.cancel();
   }
 };
+
+// unlock audio on the first interaction anywhere on the page (needed for Safari)
+["pointerdown", "keydown", "touchstart"].forEach((ev) =>
+  window.addEventListener(ev, () => window.Speech.unlock(), { once: true, capture: true }));

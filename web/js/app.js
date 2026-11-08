@@ -449,6 +449,11 @@
       const ref = $("replay-ref"), user = $("replay-user");
       if (m.ref_url) ref.src = m.ref_url;
       const clip = (m.clips || [])[0];
+      // no recording of the dancer: reference only, centred (guarded so it can never stop the timeline)
+      const userPane = $("replay-user-pane");
+      if (userPane) userPane.hidden = !clip;
+      const screen = $("screen-replay");
+      if (screen) screen.classList.toggle("ref-only", !clip);
       if (clip) { user.src = clip.file; user.dataset.offset = clip.ref_start_s || 0; }
       // keep the user video following the reference
       ref.ontimeupdate = () => {

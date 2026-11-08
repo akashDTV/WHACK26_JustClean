@@ -2,7 +2,7 @@
 
 from .config import (
     BAND1_SCORE_LOW, BAND2_SCORE_LOW, BAND3_SCORE_LOW, COLOR_BAD, COLOR_GOOD,
-    COLOR_OK, SCORE_BANDS,
+    COLOR_OK, SCORE_BANDS, WORST_SHARE, WORST_WEIGHT,
 )
 
 
@@ -50,6 +50,14 @@ def compare(live_angles, ref_angles):
 
 
 def overall_score(results):
-    """Average score of all segments that could be compared (None if none)."""
-    scores = [r["score"] for r in results.values() if r is not None]
-    return sum(scores) / len(scores) if scores else None
+    """Score for the whole body this frame (None if nothing could be compared).
+
+    Half the plain average of the body parts, half the average of the worst third
+    (WORST_WEIGHT / WORST_SHARE), so one badly wrong limb really shows."""
+    scores = sorted(r["score"] for r in results.values() if r is not None)
+    if not scores:
+        return None
+    k = max(1, round(len(scores) * WORST_SHARE))
+    mean = sum(scores) / len(scores)
+    worst = sum(scores[:k]) / k
+    return (1 - WORST_WEIGHT) * mean + WORST_WEIGHT * worst

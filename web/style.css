@@ -314,6 +314,10 @@ table.data th { color: var(--text-muted); font-weight: 600; }
 
 /* ---------- replay ---------- */
 .replay-stage { display: flex; gap: 24px; flex: 1; min-height: 420px; }
+.replay-stage .pane[hidden] { display: none; }
+/* reference only (we don't record the dancer): one video, centred */
+#screen-replay.ref-only .replay-stage { justify-content: center; }
+#screen-replay.ref-only .replay-stage .pane { flex: 0 1 960px; max-width: 960px; width: 100%; }
 .timeline { position: relative; height: 72px; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
 .timeline button { position: absolute; top: 0; bottom: 0; border: none; padding: 0; border-radius: 0; }
 

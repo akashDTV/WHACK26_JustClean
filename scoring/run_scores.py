@@ -49,7 +49,7 @@ def _valid_pieces(t, a):
             yield t[s:e], np.degrees(np.unwrap(np.radians(a[s:e])))
 
 
-def detect_events(t, a):
+def detect_events(t, a, smooth_s=None):
     """Find the movements in one angle-over-time series.
 
     Returns a list of (start_s, arrival_s, hold_s). hold_s is None if the pose was
@@ -57,7 +57,7 @@ def detect_events(t, a):
     """
     events = []
     for tt, aa in _valid_pieces(np.asarray(t, float), np.asarray(a, float)):
-        s = _smooth(tt, aa, EVENT_SMOOTH_S)
+        s = _smooth(tt, aa, EVENT_SMOOTH_S if smooth_s is None else smooth_s)
         vel = np.zeros(len(tt))
         dt = np.diff(tt)
         vel[1:] = np.abs(np.diff(s) / np.where(dt > 0, dt, np.inf))
@@ -115,26 +115,56 @@ def _mean(values):
     return float(np.mean(values)) if values else None
 
 
+def _combine(position, timing, sharp, holds):
+    """OVERALL = weighted mix of what could be measured. A component that couldn't be
+    measured is left out and the others re-weighted - it never counts as 100."""
+    comps = {"position": (position, WEIGHT_POSITION), "timing": (timing, WEIGHT_TIMING),
+             "sharpness": (sharp, WEIGHT_SHARPNESS), "holds": (holds, WEIGHT_HOLDS)}
+    have = {k: c for k, c in comps.items() if c[0] is not None}
+    overall = (sum(v * w for v, w in have.values()) / sum(w for _, w in have.values())
+               if have and position is not None else None)
+    return overall, [k for k, (v, _) in comps.items() if v is None]
+
+
+def _r(x, nd=1):
+    return None if x is None else round(float(x), nd)
+
+
+MIN_SMOOTH_SAMPLES = 5   # smooth over at least this many of YOUR samples (see _events)
+
+# A body segment needs this many scored frames before it gets its own position score
+MIN_SEGMENT_FRAMES = 10
+
+
 class RunRecorder:
     """Collects the scored frames of one run and works out position / timing /
-    sharpness / holds when the run ends.
+    sharpness / holds when the run ends - for the whole run, for EVERY BODY SEGMENT,
+    and for every section of the dance.
 
     record() - call once per scored frame
-    finish() - returns {"overall", "position", "timing", "sharpness", "holds", ...}
+    reset()  - call when the dance restarts from the beginning (throws the run away)
+    finish() - returns {"overall", "position", "timing", "sharpness", "holds",
+                        "segments": {name: {...}}, "sections": [{...}], ...}
     """
 
-    def __init__(self, ref_data, ref_fps):
+    def __init__(self, ref_data, ref_fps, section_seconds=4.0):
         self.ref_data = ref_data
         self.ref_fps = ref_fps
+        self.section_seconds = float(section_seconds)
+        self.reset()
+
+    def reset(self):
         self.t = []        # video time of each scored frame
         self.overall = []  # that frame's overall (position) score
         self.live = []     # {segment: live angle or None}
+        self.seg = []      # {segment: that frame's score or None}
         self.done = False
 
     def record(self, t, results, overall):
         self.t.append(float(t))
         self.overall.append(float(overall))
         self.live.append({n: (None if r is None else r["live"]) for n, r in results.items()})
+        self.seg.append({n: (None if r is None else float(r["score"])) for n, r in results.items()})
 
     @property
     def has_data(self):
@@ -142,60 +172,147 @@ class RunRecorder:
 
     def _events(self):
         """(segment, reference event, your event) for every pair that could be matched."""
-        ref_t = np.arange(len(self.ref_data)) / self.ref_fps
         user_t = np.array(self.t)
+        # Smooth you AND the reference over the same window, at least MIN_SMOOTH_SAMPLES of
+        # your samples. At 30 fps (sandbox) that is under EVENT_SMOOTH_S, so nothing changes.
+        # The web server samples ~10 times a second; there EVENT_SMOOTH_S covers one sample,
+        # webcam jitter looks like movement and perfect runs got low timing / holds scores.
+        step = float(np.median(np.diff(user_t))) if len(user_t) > 1 else 0.0
+        win = max(EVENT_SMOOTH_S, MIN_SMOOTH_SAMPLES * step)
         names = sorted({n for p in self.live for n in p})
         out = []
+        # Read the reference at exactly the moments YOU were sampled, so both sides are
+        # measured the same way (otherwise 30 fps vs 10 per second biases arrivals and holds).
+        idx = np.clip(np.round(user_t * self.ref_fps).astype(int), 0, max(0, len(self.ref_data) - 1))
         for name in names:
-            ref_a = np.array([np.nan if ang is None or ang.get(name) is None else ang[name]
-                              for _, ang in self.ref_data], float)
+            ref_full = np.array([np.nan if ang is None or ang.get(name) is None else ang[name]
+                                 for _, ang in self.ref_data], float)
+            ref_a = ref_full[idx] if len(ref_full) else np.full(len(user_t), np.nan)
             user_a = np.array([np.nan if p.get(name) is None else p[name]
                                for p in self.live], float)
-            for r, u in _pair_events(detect_events(ref_t, ref_a), detect_events(user_t, user_a)):
+            for r, u in _pair_events(detect_events(user_t, ref_a, win), detect_events(user_t, user_a, win)):
                 out.append((name, r, u))
         return out
 
-    def finish(self):
-        pairs = self._events()
-        timing_l = [_tol_score(abs(u[1] - r[1]), TIMING_TOL_S) for _, r, u in pairs]
-        sharp_l = [_tol_score(abs((u[1] - u[0]) - (r[1] - r[0])), SHARPNESS_TOL_S)
-                   for _, r, u in pairs]
-        hold_l = [_tol_score(abs(u[2] - r[2]), HOLD_TOL_S)
-                  for _, r, u in pairs if r[2] is not None and u[2] is not None]
-
-        position = _mean(self.overall)
-        timing = _mean(timing_l) if len(timing_l) >= MIN_EVENTS_PER_COMPONENT else None
-        sharp = _mean(sharp_l) if len(sharp_l) >= MIN_EVENTS_PER_COMPONENT else None
-        holds = _mean(hold_l) if len(hold_l) >= MIN_EVENTS_PER_COMPONENT else None
-
-        # OVERALL = weighted mix of what could be measured. A component that couldn't be
-        # measured is left out and the others re-weighted - it never counts as 100.
-        comps = {"position": (position, WEIGHT_POSITION), "timing": (timing, WEIGHT_TIMING),
-                 "sharpness": (sharp, WEIGHT_SHARPNESS), "holds": (holds, WEIGHT_HOLDS)}
-        have = {k: c for k, c in comps.items() if c[0] is not None}
-        overall = (sum(v * w for v, w in have.values()) / sum(w for _, w in have.values())
-                   if have and position is not None else None)
-        return {
-            "overall": overall, "position": position, "timing": timing,
-            "sharpness": sharp, "holds": holds,
-            "unavailable": [k for k, (v, _) in comps.items() if v is None],
-            "matched_events": len(pairs), "scored_frames": len(self.t),
-            # per-event detail: how much later / slower / longer you were (ms)
-            "events": [{
-                "segment": n,
+    @staticmethod
+    def _measures(pairs):
+        """Per-event numbers. r / u = (start_s, arrival_s, hold_s)."""
+        out = []
+        for name, r, u in pairs:
+            has_hold = r[2] is not None and u[2] is not None
+            out.append({
+                "segment": name, "t": r[1],               # which section it belongs to
+                "timing": _tol_score(abs(u[1] - r[1]), TIMING_TOL_S),
+                "sharpness": _tol_score(abs((u[1] - u[0]) - (r[1] - r[0])), SHARPNESS_TOL_S),
+                "hold": _tol_score(abs(u[2] - r[2]), HOLD_TOL_S) if has_hold else None,
                 "arrival_offset_ms": round((u[1] - r[1]) * 1000),                 # + = later
                 "duration_diff_ms": round(((u[1] - u[0]) - (r[1] - r[0])) * 1000),  # + = slower
-                "hold_diff_ms": (None if r[2] is None or u[2] is None
-                                 else round((u[2] - r[2]) * 1000)),
-            } for n, r, u in pairs],
+                "hold_diff_ms": round((u[2] - r[2]) * 1000) if has_hold else None,  # + = longer
+            })
+        return out
+
+    @staticmethod
+    def _components(ms):
+        """timing / sharpness / holds (+ average ms differences) from a list of events."""
+        n = MIN_EVENTS_PER_COMPONENT
+        tl = [m["timing"] for m in ms]
+        sl = [m["sharpness"] for m in ms]
+        hl = [m["hold"] for m in ms if m["hold"] is not None]
+        return {
+            "timing": _mean(tl) if len(tl) >= n else None,
+            "sharpness": _mean(sl) if len(sl) >= n else None,
+            "holds": _mean(hl) if len(hl) >= n else None,
+            "arrival_offset_ms": _mean([m["arrival_offset_ms"] for m in ms]) if len(tl) >= n else None,
+            "duration_diff_ms": _mean([m["duration_diff_ms"] for m in ms]) if len(sl) >= n else None,
+            "hold_diff_ms": _mean([m["hold_diff_ms"] for m in ms if m["hold_diff_ms"] is not None])
+                            if len(hl) >= n else None,
+            "events_matched": len(ms),
+        }
+
+    def finish(self):
+        pairs = self._events()
+        ms = self._measures(pairs)
+        position = _mean(self.overall)
+        run = self._components(ms)
+        overall, unavailable = _combine(position, run["timing"], run["sharpness"], run["holds"])
+        total = len(self.t)
+
+        # ---- every body segment, whole run -------------------------------------------
+        names = sorted({n for p in self.seg for n in p})
+        segments = {}
+        for n in names:
+            scores = [p[n] for p in self.seg if p.get(n) is not None]
+            c = self._components([m for m in ms if m["segment"] == n])
+            segments[n] = {
+                "position": _r(_mean(scores)) if len(scores) >= MIN_SEGMENT_FRAMES else None,
+                "timing": _r(c["timing"]), "sharpness": _r(c["sharpness"]), "holds": _r(c["holds"]),
+                "arrival_offset_ms": _r(c["arrival_offset_ms"], 0),
+                "duration_diff_ms": _r(c["duration_diff_ms"], 0),
+                "hold_diff_ms": _r(c["hold_diff_ms"], 0),
+                "events_matched": c["events_matched"],
+                "frames_scored": len(scores),
+                "confidence": _r(len(scores) / total, 2) if total else 0.0,
+                "by_section": [],
+            }
+
+        # ---- every section of the dance ------------------------------------------------
+        sections = []
+        if total:
+            S = self.section_seconds
+            for k in range(int(self.t[-1] // S) + 1):
+                lo, hi = k * S, (k + 1) * S
+                idx = [i for i, t in enumerate(self.t) if lo <= t < hi]
+                if not idx:
+                    continue
+                sm = [m for m in ms if lo <= m["t"] < hi]
+                c = self._components(sm)
+                pos = _mean([self.overall[i] for i in idx])
+                ov, un = _combine(pos, c["timing"], c["sharpness"], c["holds"])
+                sec = {"section": k + 1, "start_s": lo, "end_s": hi, "frames_scored": len(idx),
+                       "overall": _r(ov), "position": _r(pos), "timing": _r(c["timing"]),
+                       "sharpness": _r(c["sharpness"]), "holds": _r(c["holds"]),
+                       "unavailable": un, "segments": {}}
+                for n in names:
+                    sc = [self.seg[i][n] for i in idx if self.seg[i].get(n) is not None]
+                    cc = self._components([m for m in sm if m["segment"] == n])
+                    blk = {"position": _r(_mean(sc)) if len(sc) >= 3 else None,
+                           "timing": _r(cc["timing"]), "sharpness": _r(cc["sharpness"]),
+                           "holds": _r(cc["holds"])}
+                    sec["segments"][n] = blk
+                    segments[n]["by_section"].append({"section": k + 1, **blk})
+                sections.append(sec)
+
+        return {
+            "overall": overall, "position": position, "timing": run["timing"],
+            "sharpness": run["sharpness"], "holds": run["holds"],
+            "unavailable": unavailable,
+            "matched_events": len(pairs), "scored_frames": total,
+            "segments": segments,       # every body part: position / timing / sharpness / holds
+            "sections": sections,       # every section, with the same four scores per body part
+            # per-event detail: how much later / slower / longer you were (ms)
+            "events": [{"segment": m["segment"], "arrival_offset_ms": m["arrival_offset_ms"],
+                        "duration_diff_ms": m["duration_diff_ms"], "hold_diff_ms": m["hold_diff_ms"]}
+                       for m in ms],
         }
 
 
-def finish_run(recorder, complete=True, callback=None):
+def save_run_scores(res, folder):
+    """Write one run's scores to <folder>/run_<time>.json. Returns the path."""
+    import json
+    import os
+    import time
+    os.makedirs(folder, exist_ok=True)
+    path = os.path.join(folder, time.strftime("run_%Y%m%d_%H%M%S.json"))
+    with open(path, "w") as f:
+        json.dump(res, f, indent=1)
+    return path
+
+
+def finish_run(recorder, complete=True, callback=None, save_dir=None):
     """Work out and print the run scores (once per run). Returns the result dict.
 
     callback - optional function called with the result dict when the run is scored
-    (pose_webcam.py passes its RUN_SCORE_CALLBACK here).
+    save_dir - optional folder; the full scores are also saved there as JSON
     """
     if recorder is None or recorder.done or not recorder.has_data:
         return None
@@ -212,6 +329,8 @@ def finish_run(recorder, complete=True, callback=None):
         print("Not measurable this run (left out of OVERALL):", ", ".join(res["unavailable"]))
     if not complete:
         print("(run was stopped before the video finished)")
+    if save_dir:
+        print("Saved:", save_run_scores(res, save_dir))
     if callback is not None:
         callback(res)
     return res

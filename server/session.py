@@ -199,6 +199,7 @@ class RunStats:
         self.sec_ticks: dict = {}    # section -> camera checks (seen or not)
         self.sec_seg: dict = {}      # section -> segment -> {n, score, absdiff, worst, worst_t}
         self.seg_absdiff: dict = {}  # segment -> sum of |angle difference|
+        self.recorder = None         # scoring.run_scores.RunRecorder (timing/sharpness/holds)
 
     def tick(self, t: float):
         """Count every camera check while playing (seen or not), for tracking quality."""
@@ -450,6 +451,11 @@ class DanceSession:
     async def _play(self, track: engine.ReferenceTrack) -> RunStats:
         stats = RunStats(SECTION_SECONDS)
         stats.duration = track.duration_s
+        try:   # the team's scorer: timing / sharpness / holds (scoring/run_scores.py)
+            stats.recorder = debrief_bridge.make_recorder(track, SECTION_SECONDS)
+        except Exception as exc:
+            print("[session] RunRecorder unavailable, position only:", exc)
+            stats.recorder = None
         n_sections = max(1, math.ceil(track.duration_s / SECTION_SECONDS))
         self._ended.clear()
         self._clock.reset()
@@ -511,6 +517,8 @@ class DanceSession:
             streak = streak + dt if band == "green" else 0.0
             if smoothed is not None and overall is not None:
                 stats.add(t, smoothed, band, snap.results, dt, streak)
+                if stats.recorder is not None:
+                    stats.recorder.record(t, snap.results or {}, overall)
 
             await self.send({
                 "type": "score",
