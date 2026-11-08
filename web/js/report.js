@@ -84,6 +84,7 @@
       const fb = msg.feedback || {};
       const det = msg.details || {};
       const coach = window.coachById(msg.coach_id);
+      window.Speech.addAudio(fb.audio);   // this coach's ElevenLabs voice, played when speechFor(fb) is spoken
 
       // coach strip
       window.fillAvatar(document.getElementById("rep-avatar"), coach);
@@ -344,7 +345,8 @@
     },
 
     speakPanel(items) {
-      window.Speech.speakAll(items.map(({ coach, fb }) => ({ text: fb.headline || "", coach, tag: coach.id })));
+      // fb.audio = that coach's ElevenLabs clip of the headline (browser voice if missing)
+      window.Speech.speakAll(items.map(({ coach, fb }) => ({ text: fb.headline || "", coach, tag: coach.id, audio: fb.audio })));
     },
 
     markSpeaking(coachId) {
