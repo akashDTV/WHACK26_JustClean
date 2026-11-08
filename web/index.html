@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Live Dance Coach</title>
+  <title>JustClean</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css">
@@ -98,6 +98,9 @@
   <!-- Screen-reader announcements (a11y.js writes here) -->
   <div id="announcer" class="sr-only" aria-live="polite" aria-atomic="true"></div>
 
+  <!-- Colour sweep shown when the screen changes -->
+  <div class="page-wipe" id="page-wipe" aria-hidden="true"></div>
+
   <!-- Edge glow sits over everything while dancing -->
   <div class="glow" aria-hidden="true"></div>
 
@@ -121,7 +124,7 @@
   <!-- ============ CHOOSER ============ -->
   <section id="screen-chooser" class="screen" aria-labelledby="chooser-h">
     <header class="topbar">
-      <h1 id="chooser-h" class="brand">Live Dance Coach</h1>
+      <h1 id="chooser-h" class="brand"><span class="brand-just">Just</span><span class="brand-clean">Clean</span></h1>
       <span class="muted">Video stays on this laptop · only a score summary goes to Claude</span>
     </header>
 
@@ -133,8 +136,17 @@
           <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="var(--accent-soft)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 16V4"/><path d="M6 10l6-6 6 6"/><path d="M4 20h16"/></svg>
           <label for="upload-input" class="btn btn-ghost" style="font-weight:600">Upload your own clip</label>
           <input id="upload-input" type="file" accept="video/mp4,video/webm,video/quicktime" class="sr-only">
-          <span class="muted" style="font-size: var(--fs-sm)">MP4 / WebM / MOV · up to 30 s · one dancer, full body</span>
-          <div class="progress" id="upload-progress" hidden><div></div></div>
+          <span class="muted" style="font-size: var(--fs-sm)">MP4 / WebM / MOV · up to 7 min · one dancer, full body</span>
+          <div class="upload-meter" id="upload-progress" hidden>
+            <div class="upload-meter-row">
+              <span class="upload-stage" id="upload-stage">Uploading…</span>
+              <span class="upload-pct" id="upload-pct">0%</span>
+            </div>
+            <div class="progress" role="progressbar" aria-label="Upload progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div class="progress-fill"></div></div>
+            <ol class="upload-steps" aria-hidden="true">
+              <li>Upload</li><li>Convert</li><li>Track</li><li>Check</li>
+            </ol>
+          </div>
           <span class="upload-status" id="upload-status" aria-live="polite"></span>
         </div>
       </div>
@@ -191,7 +203,13 @@
         <span class="chip" id="section-chip">Section 1</span>
         <span class="chip" id="speed-chip">1× speed</span>
       </div>
-      <span class="muted" id="coach-chip">Coach</span>
+      <div class="btn-row">
+        <span class="muted" id="coach-chip">Coach</span>
+        <button class="btn btn-ghost btn-sm" data-action="restart" title="Start the dance again from the beginning">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/></svg>
+          Restart
+        </button>
+      </div>
     </header>
     <div class="stage">
       <div class="pane">
@@ -229,6 +247,7 @@
       <div class="caption">
         <span class="muted" id="rep-speaking">Coach</span>
         <p class="caption-text" id="rep-caption" style="margin:0"></p>
+        <div class="caption-more" id="rep-caption-more"></div>
       </div>
       <button class="btn btn-ghost" data-action="replay-voice">Replay voice</button>
       <button class="btn btn-ghost" data-action="stop-voice">Stop voice</button>
@@ -243,11 +262,24 @@
             <span class="muted" style="font-size: var(--fs-sm)" id="rep-meta"></span>
           </div>
         </div>
-        <p id="rep-summary" style="margin:0; font-size: var(--fs-lg)"></p>
+        <p id="rep-summary" style="margin:0; font-size: var(--fs-lg)" hidden></p>
         <div class="comp-grid" id="rep-components"></div>
         <div style="display:flex; flex-direction:column; gap:10px">
-          <span class="label">Body parts · lowest first</span>
-          <div id="rep-parts" style="display:flex; flex-direction:column; gap:10px"></div>
+          <div class="parts-head">
+            <span class="label" id="parts-h">Body parts · <span id="parts-mode-label">lowest first</span></span>
+            <button type="button" class="icon-btn" id="parts-filter-btn" aria-expanded="false" aria-controls="parts-filter" aria-label="Filter body parts" title="Filter body parts">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 5h18l-7 8v6l-4-2v-4z"/></svg>
+            </button>
+          </div>
+          <div class="parts-filter" id="parts-filter" hidden>
+            <div class="seg" role="group" aria-label="Sort body parts" id="parts-mode">
+              <button type="button" class="seg-btn" data-mode="low" aria-pressed="true">Lowest first</button>
+              <button type="button" class="seg-btn" data-mode="high" aria-pressed="false">Highest first</button>
+              <button type="button" class="seg-btn" data-mode="pick" aria-pressed="false">Choose</button>
+            </div>
+            <div class="parts-pick" id="parts-pick" role="group" aria-label="Choose body parts to show" hidden></div>
+          </div>
+          <div id="rep-parts" style="display:flex; flex-direction:column; gap:10px" aria-live="polite"></div>
         </div>
       </div>
 
@@ -317,6 +349,7 @@
   <script src="js/coaches.js"></script>
   <script src="js/a11y.js"></script>
   <script src="js/speech.js"></script>
+  <script src="js/typer.js"></script>
   <script src="js/report.js"></script>
   <script src="js/app.js"></script>
   <script src="js/ws.js"></script>

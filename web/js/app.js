@@ -1,4 +1,4 @@
-// Live Dance Coach — main page logic.
+// JustClean — main page logic.
 // Every message from Python goes through App.handle(msg).
 // Every message to Python goes through App.send(type, payload).
 // Message names follow server/messages.md — if a name differs there,
@@ -42,6 +42,7 @@
     },
 
     show(screen) {
+      if (screen !== this.state.screen) pageWipe();
       this.state.screen = screen;
       document.body.dataset.screen = screen;
       document.querySelectorAll(".screen").forEach((s) => s.classList.toggle("active", s.id === `screen-${screen}`));
@@ -57,19 +58,80 @@
       const list = $("clip-list");
       const upload = $("upload-card");
       list.querySelectorAll(".clip-card").forEach((n) => n.remove());
+      const ed = this.state.editing || {};
       this.state.clips.forEach((c) => {
         const ok = c.ref_ok !== false;
-        const card = el("button", {
-          class: "card clip-card", "aria-pressed": String(this.state.clipId === c.id),
+        const info = probeClip(c, () => this.renderClips());        // first frame + real length
+        const thumb = c.thumb || info.thumb;
+        const dur = info.duration || c.duration_s;
+        const selected = this.state.clipId === c.id;
+        const renaming = ed.id === c.id && ed.mode === "rename";
+        const deleting = ed.id === c.id && ed.mode === "delete";
+
+        const pick = el("button", {
+          class: "clip-pick", type: "button", "aria-pressed": String(selected),
+          "aria-label": `${c.name}${dur ? `, ${fmtDuration(dur)}` : ""}`,
           onclick: () => this.chooseClip(c.id)
         },
-          el("div", { class: "thumb" }, c.thumb ? el("img", { src: c.thumb, alt: "" }) : "[CLIP THUMBNAIL]"),
-          el("div", { class: "clip-title" },
+          el("div", { class: "thumb" }, thumb ? el("img", { src: thumb, alt: "" }) : el("span", { class: "thumb-loading", text: c.url ? "Loading preview…" : "No preview" })),
+          renaming ? "" : el("div", { class: "clip-title" },
             el("strong", { text: c.name }),
-            el("span", { class: "muted", text: c.duration_s ? `${Math.round(c.duration_s)} s` : "" })),
+            el("span", { class: "muted", text: dur ? fmtDuration(dur) : "" })));
+
+        let extra = "";
+        if (renaming) {
+          const input = el("input", { class: "rename-input", type: "text", value: c.name, maxlength: "60", "aria-label": "New name for this dance" });
+          const save = () => { const v = input.value.trim(); if (v && v !== c.name) this.renameClip(c.id, v); this.editClip(null); };
+          input.addEventListener("keydown", (e) => { if (e.key === "Enter") save(); if (e.key === "Escape") this.editClip(null); });
+          extra = el("form", { class: "clip-edit", onsubmit: (e) => { e.preventDefault(); save(); } },
+            input,
+            el("div", { class: "btn-row" },
+              el("button", { class: "btn btn-primary btn-sm", type: "submit", text: "Save" }),
+              el("button", { class: "btn btn-ghost btn-sm", type: "button", text: "Cancel", onclick: () => this.editClip(null) })));
+          setTimeout(() => { input.focus(); input.select(); });
+        } else if (deleting) {
+          extra = el("div", { class: "clip-edit clip-confirm", role: "alertdialog", "aria-label": `Delete ${c.name}?` },
+            el("span", { text: `Delete “${c.name}”?` }),
+            el("div", { class: "btn-row" },
+              el("button", { class: "btn btn-danger btn-sm", type: "button", text: "Delete", onclick: () => this.deleteClip(c.id) }),
+              el("button", { class: "btn btn-ghost btn-sm", type: "button", text: "Keep it", onclick: () => this.editClip(null) })));
+          setTimeout(() => extra.querySelector(".btn-ghost").focus());
+        }
+
+        const actions = (renaming || deleting || c.editable === false) ? "" : el("div", { class: "clip-actions" },
+          el("button", { class: "icon-btn on-thumb", type: "button", title: "Rename", "aria-label": `Rename ${c.name}`, onclick: () => this.editClip(c.id, "rename") }, pencilIcon()),
+          el("button", { class: "icon-btn on-thumb", type: "button", title: "Delete", "aria-label": `Delete ${c.name}`, onclick: () => this.editClip(c.id, "delete") }, trashIcon()));
+
+        const card = el("div", { class: `card clip-card${selected ? " selected" : ""}` },
+          pick, actions, extra,
           !ok || c.warning ? el("span", { class: "clip-warning", text: c.warning || "Reference data missing — can't use this clip yet" }) : "");
         list.insertBefore(card, upload);
       });
+    },
+
+    editClip(id, mode) {
+      this.state.editing = id ? { id, mode } : null;
+      this.renderClips();
+    },
+
+    renameClip(id, name) {
+      const c = this.state.clips.find((x) => x.id === id);
+      if (c) c.name = name;                       // show it straight away; Python confirms with a clips message
+      this.send("command", { name: "rename_clip", value: id, new_name: name });
+    },
+
+    deleteClip(id) {
+      this.state.editing = null;
+      this.state.clips = this.state.clips.filter((x) => x.id !== id);
+      if (this.state.clipId === id) {
+        this.state.clipId = null;
+        $("start-btn").disabled = true;
+        $("start-hint").textContent = "Pick a dance to begin · or press Space";
+        const v = $("ref-video"); v.removeAttribute("src"); v.load(); $("ref-placeholder").hidden = false;
+      }
+      this.renderClips();
+      this.send("command", { name: "delete_clip", value: id });
+      window.A11Y.announce("Dance deleted");
     },
 
     chooseClip(id) {
@@ -155,7 +217,7 @@
         onclick: () => this.chooseCoach(c.id)
       },
         el("div", { class: "coach-head" },
-          el("div", { class: "avatar", style: `background:${c.color}`, "aria-hidden": "true", text: c.initial }),
+          window.makeAvatar(c),
           el("div", { style: "display:flex; flex-direction:column; gap:2px" },
             el("span", { class: "coach-name", text: c.name }),
             el("span", { class: "muted", style: "font-size: var(--fs-sm)", text: c.role }))),
@@ -178,11 +240,27 @@
     reset(name = "reset") {
       window.Speech.stop();
       hideOverlays();
+      clearLive();
+      $("breakdown").open = false;
+      window.scrollTo({ top: 0 });
       const v = $("ref-video");
       v.pause();
       v.currentTime = 0;
       this.send("command", { name });
       this.show("chooser");
+    },
+
+    // Restart the dance from the beginning (stays on the dancing screen).
+    // Python should clear this run's score/log and do the countdown again.
+    restart() {
+      if (this.state.screen !== "dancing") return;
+      const v = $("ref-video");
+      v.pause();
+      v.currentTime = 0;
+      hideOverlays();
+      clearLive();
+      showPop("RESTART");
+      this.send("command", { name: "restart" });
     },
 
     // ---------- upload ----------
@@ -192,23 +270,24 @@
       const okType = /video\/(mp4|webm|quicktime)/.test(file.type);
       if (!okType) { status.textContent = "Please choose an MP4, WebM or MOV file."; return; }
       const dur = await videoDuration(file).catch(() => null);
-      if (dur && dur > 31) { status.textContent = `That clip is ${Math.round(dur)} s — please trim it to 30 s or less.`; return; }
+      if (dur && dur > MAX_UPLOAD_S + 1) { status.textContent = `That clip is ${fmtDuration(dur)} long. Please trim it to ${MAX_UPLOAD_S / 60} minutes or less.`; return; }
 
       bar.hidden = false;
-      setProgress(bar, 0);
-      status.textContent = "Uploading…";
+      bar.classList.remove("done", "failed");
+      setProgress(bar, 0, "Uploading…");
+      status.textContent = "";
 
       if (this.state.fake) { window.Fake.upload(file); return; }
 
       const xhr = new XMLHttpRequest();
       const form = new FormData();
       form.append("file", file);
-      xhr.upload.onprogress = (e) => { if (e.lengthComputable) setProgress(bar, (e.loaded / e.total) * 30); };
+      xhr.upload.onprogress = (e) => { if (e.lengthComputable) setProgress(bar, (e.loaded / e.total) * 30, "Uploading…"); };
       xhr.onload = () => {
-        if (xhr.status >= 200 && xhr.status < 300) status.textContent = "Tracking the dancer… this takes a few seconds";
-        else { status.textContent = "Upload failed — try again."; bar.hidden = true; }
+        if (xhr.status >= 200 && xhr.status < 300) setProgress(bar, 30, "Tracking the dancer…");
+        else uploadFailed("Upload failed. Try again.");
       };
-      xhr.onerror = () => { status.textContent = "Upload failed — is the server running?"; bar.hidden = true; };
+      xhr.onerror = () => uploadFailed("Upload failed. Is the server running?");
       xhr.open("POST", "/upload");
       xhr.send(form);
     },
@@ -263,6 +342,7 @@
       else if (["waiting", "loading", "finished", "error"].includes(m.state)) App.setCamera(false);
       if (m.state === "finished") {
         $("rep-caption").textContent = "Your coach is reviewing your dance…";
+        $("rep-caption-more").replaceChildren();
         $("rep-overall").textContent = "…";
       }
       if (screen !== App.state.screen) App.show(screen);
@@ -319,12 +399,13 @@
     upload_progress(m) {
       const bar = $("upload-progress");
       bar.hidden = false;
-      setProgress(bar, 30 + (m.percent || 0) * 0.7);
-      $("upload-status").textContent = m.stage || "Processing…";
+      setProgress(bar, 30 + (m.percent || 0) * 0.7, m.stage || "Processing…");
     },
 
     upload_result(m) {
-      $("upload-progress").hidden = true;
+      const bar = $("upload-progress");
+      if (m.ok) { setProgress(bar, 100, "Ready!"); bar.classList.add("done"); setTimeout(() => { bar.hidden = true; }, 1400); }
+      else uploadFailed("");
       const status = $("upload-status");
       if (!m.ok) { status.textContent = `We couldn't use that clip: ${(m.warnings || []).join(" ") || "try one dancer, full body, steady camera."}`; return; }
       status.textContent = (m.warnings || []).length ? `Ready, with a warning: ${m.warnings.join(" ")}` : `Ready · ${m.tracked_pct}% of frames tracked`;
@@ -378,7 +459,86 @@
   };
 
   // ---------- helpers ----------
-  function setProgress(bar, pct) { bar.firstElementChild.style.width = `${Math.max(0, Math.min(100, pct))}%`; }
+  const MAX_UPLOAD_S = 7 * 60;   // longest clip you can upload
+
+  // Thumbnail (first frame) + real length for a clip, read from its video file. Cached per URL.
+  const PROBES = new Map();
+  function probeClip(c, onReady) {
+    if (!c.url) return {};
+    let p = PROBES.get(c.url);
+    if (p) return p;
+    p = {};
+    PROBES.set(c.url, p);
+    const v = document.createElement("video");
+    v.muted = true; v.preload = "auto"; v.playsInline = true; v.crossOrigin = "anonymous";
+    v.onloadedmetadata = () => {
+      p.duration = Number.isFinite(v.duration) ? v.duration : null;
+      v.currentTime = Math.min(0.05, (v.duration || 1) / 2);   // first frame (a hair in, so it's decoded)
+    };
+    v.onseeked = () => {
+      try {
+        const w = 480, h = Math.round(w * (v.videoHeight / v.videoWidth || 9 / 16));
+        const cv = document.createElement("canvas"); cv.width = w; cv.height = h;
+        cv.getContext("2d").drawImage(v, 0, 0, w, h);
+        p.thumb = cv.toDataURL("image/jpeg", 0.8);
+      } catch (e) { /* video from another site: no thumbnail */ }
+      v.removeAttribute("src"); v.load();
+      onReady();
+    };
+    v.onerror = () => { p.failed = true; };
+    v.src = c.url;
+    return p;
+  }
+  const svgIcon = (d) => { const s = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    s.setAttribute("width", "16"); s.setAttribute("height", "16"); s.setAttribute("viewBox", "0 0 24 24");
+    s.setAttribute("fill", "none"); s.setAttribute("stroke", "currentColor"); s.setAttribute("stroke-width", "2.2");
+    s.setAttribute("stroke-linecap", "round"); s.setAttribute("stroke-linejoin", "round"); s.setAttribute("aria-hidden", "true");
+    s.innerHTML = d; return s; };
+  const pencilIcon = () => svgIcon('<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M14 6l4 4"/>');
+  const trashIcon = () => svgIcon('<path d="M4 7h16"/><path d="M10 11v6M14 11v6"/><path d="M6 7l1 13h10l1-13"/><path d="M9 7V4h6v3"/>');
+  function fmtDuration(s) { s = Math.round(s); return s < 60 ? `${s} s` : `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; }
+
+  // Upload bar: fill, % label, stage text and the 4 step dots
+  function setProgress(bar, pct, stage) {
+    pct = Math.max(0, Math.min(100, pct));
+    bar.querySelector(".progress-fill").style.width = `${pct}%`;
+    bar.querySelector(".progress").setAttribute("aria-valuenow", String(Math.round(pct)));
+    $("upload-pct").textContent = `${Math.round(pct)}%`;
+    if (stage) $("upload-stage").textContent = stage;
+    const step = pct >= 100 ? 4 : pct >= 90 ? 3 : pct >= 55 ? 2 : pct >= 30 ? 1 : 0;
+    bar.querySelectorAll(".upload-steps li").forEach((li, i) => {
+      li.classList.toggle("done", i < step);
+      li.classList.toggle("now", i === step);
+    });
+    if (stage) window.A11Y.announce(stage);
+  }
+  function uploadFailed(text) {
+    const bar = $("upload-progress");
+    bar.classList.add("failed");
+    $("upload-stage").textContent = "Upload failed";
+    setTimeout(() => { bar.hidden = true; bar.classList.remove("failed"); }, 1800);
+    if (text) $("upload-status").textContent = text;
+  }
+
+  // Colour sweep between screens (skipped when reduced motion is on)
+  function pageWipe() {
+    const w = $("page-wipe");
+    w.classList.remove("go");
+    void w.offsetWidth;               // restart the animation
+    w.classList.add("go");
+  }
+
+  // Clear the live score display (restart / try again)
+  function clearLive() {
+    $("score-num").textContent = "–";
+    $("bar-fill").style.height = "0%";
+    $("band-label").textContent = "Waiting";
+    $("streak-num").textContent = "0 s";
+    $("missing-list").replaceChildren();
+    $("missing-list").dataset.key = "";
+    document.body.dataset.band = "none";
+    App.state.lastStreakPop = 0;
+  }
   function hideOverlays() { $("countdown-overlay").classList.remove("show"); $("banner-overlay").classList.remove("show"); }
 
   // Calibration screen: let the camera picture (and its dashed frame) be as big as
@@ -445,6 +605,7 @@
       if (a === "start") App.start();
       else if (a === "reset") App.reset("reset");
       else if (a === "try-again") App.reset("try_again");
+      else if (a === "restart") App.restart();
       else if (a === "back") { App.send("command", { name: "reset" }); App.show("chooser"); }
       else if (a === "replay-voice" && window.Report.last) window.Speech.speak(window.Report.speechFor(window.Report.last.feedback || {}), window.coachById(window.Report.last.coach_id), "report");
       else if (a === "stop-voice") window.Speech.stop();
@@ -468,12 +629,24 @@
     }, 100);
     video.addEventListener("ended", () => App.send("video_ended"));
 
+    // body parts filter: little button shows/hides the options
+    $("parts-filter-btn").addEventListener("click", () => window.Report.toggleFilter());
+
+    // body parts filter buttons on the report
+    document.querySelectorAll("#parts-mode .seg-btn").forEach((b) =>
+      b.addEventListener("click", () => window.Report.setPartsMode(b.dataset.mode)));
+
     // speech -> captions / panel highlight
     window.Speech.onStart = (item) => {
-      if (item.tag === "report") $("rep-caption").textContent = item.text;
-      else window.Report.markSpeaking(item.tag);
+      if (item.tag !== "report") window.Report.markSpeaking(item.tag);
+      window.Report.onSpeechStart(item);          // start typing the caption
     };
-    window.Speech.onEnd = (item) => { if (item.tag !== "report") window.Report.markSpeaking(null); };
+    window.Speech.onBoundary = (item, i, len) => window.Report.onSpeechWord(item, i, len);
+    window.Speech.onEnd = (item) => {
+      if (item.tag !== "report") window.Report.markSpeaking(null);
+      window.Report.onSpeechEnd(item);            // type whatever is left
+    };
+    window.Speech.onStop = () => window.Report.revealAllTyping();   // stopped early: show all text
 
     // webcam stream (real mode only)
     document.querySelectorAll("img.cam-feed").forEach((img) => {
@@ -515,5 +688,6 @@
   }
 
   window.App = App;
+  App.setUploadProgress = (pct, stage) => setProgress($("upload-progress"), pct, stage);   // used by fake.js
   wire();
 })();
