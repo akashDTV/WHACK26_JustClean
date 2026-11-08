@@ -155,11 +155,16 @@ def prepare(params, comparison):
     reliable, dropped = [], []
     for i, f in enumerate(findings):
         item = dict(f, finding_id=i)
+        if isinstance(f.get("timestamp_s"), (int, float)):
+            item["time"] = clock(f["timestamp_s"])           # e.g. "0:23", the only form Claude may use
         (reliable if f.get("confidence", 1.0) >= MIN_CONFIDENCE else dropped).append(item)
     payload = {
         "task": "Create concise, actionable dance-coach feedback from measured results.",
         "scores": params.get("scores", {}),
-        "sections": params.get("sections", []),
+        "sections": [dict(sec, time_range=f"{clock(sec['start_s'])} - {clock(sec['end_s'])}")
+                     if isinstance(sec.get("start_s"), (int, float))
+                     and isinstance(sec.get("end_s"), (int, float)) else dict(sec)
+                     for sec in params.get("sections", [])],
         "top_findings": reliable,
         "body_part_scores": get_body_parts(comparison),
         "data_quality": params.get("data_quality", {}),
@@ -190,9 +195,25 @@ def allowed_scores(payload):
 SYSTEM_PROMPT = """You are a dance rehearsal coach. The supplied reference video is the standard.
 Your job is to explain measured differences and give practical rehearsal advice.
 
+HARD RULE - NO NUMBERS (this overrides everything else):
+- Nothing you write may contain a number of any kind: no digits, no scores, no angles, no degrees,
+  no seconds or milliseconds, no percentages, no fractions, no counts.
+- This includes numbers written as words ("two", "fifteen", "half a second", "a quarter turn")
+  and ordinals ("second", "third"): say "the next move", "later", "earlier" instead.
+- Do not use the words degree, percent, second, millisecond or frame at all.
+- There are exactly TWO exceptions:
+  1. a section label written exactly as "Section N" (e.g. "Section 2");
+  2. a timestamp in m:ss form, copied character-for-character from a "time" field on a
+     top_findings entry or from a section's "time_range" (e.g. "around 0:23"). Never work out,
+     round or invent a timestamp, and never use the raw timestamp_s / start_s / end_s values.
+- The input contains numbers so you can judge what matters; translate them into words
+  ("slightly", "quite a lot", "a touch late", "near the end of Section 2"). Never copy them.
+- This applies to every field, including data_caveat. Any sentence containing a number is
+  deleted automatically before the dancer sees it, so a number only wastes your sentence.
+
 STRICT RULES:
 - Return one JSON object matching the schema below, and nothing else (no markdown fences).
-- Never calculate, alter or invent scores. If you quote a score, write it exactly as supplied, as NN/100.
+- Never calculate, alter, invent or quote scores.
 - Only discuss facts present in the input. Do not invent body parts, sections, timestamps or measurements.
 - Do not claim to hear or analyse the music or identify beats. Say "later than the reference", never "missed the beat".
 - Do not call a movement technically wrong; describe how it differs from this reference.
@@ -201,8 +222,7 @@ STRICT RULES:
 - Treat body_part_scores with score null as unavailable; do not guess them.
 - If confidence is low or data is missing, say so in data_caveat and avoid unsupported claims. If there are no reliable findings, return an empty priority_fixes array.
 - Keep everything concise enough for an on-screen results page and to be spoken aloud.
-- Never use numbers, angles or times in overall_summary, priority_fixes or section_notes; the numbers are shown separately in a detailed breakdown.
-- Never mention tracking, tracked frames, confidence or whether something was detected, except inside data_caveat.
+- Never mention tracking, confidence or whether something was detected, except inside data_caveat (and even there, in words only, with no numbers).
 - Do not repeat yourself: each section note must say something new and must not restate the joint or measurements already listed for that section.
 - Write overall_summary fully in the personality style given in the input (coach_personality.style_guide): let the tone, word choice and energy clearly reflect the sliders. Do NOT include any score or number in overall_summary (the scores are shown elsewhere); describe how the run went in words. The priority fixes use the plain-language style described under PRIORITY FIX STYLE below.
 
@@ -210,7 +230,7 @@ PRIORITY FIX STYLE (title, subheading, description, fix, and section notes):
 - Write like a friendly, observant coach talking to the dancer, not like a report. Use "you" and "your", everyday words and short sentences.
 - Lead with what it looked or felt like compared with the reference (e.g. "your left arm stayed a bit curled where the reference opens it out"), not with measurements.
 - Avoid jargon and metric language such as "mean angle difference", "arrival offset", "degrees of error" or "confidence".
-- NO numbers anywhere in your text: no scores, angles, degrees, seconds, milliseconds or percentages, written as digits or as words. The only number allowed is a section number ("Section 2"). Describe size in words ("slightly", "a little", "quite a lot") and timing in words ("a touch late", "noticeably late", "near the end of section 2").
+- See the HARD RULE above: no numbers of any kind. Describe size in words ("slightly", "a little", "quite a lot") and how early or late in words ("a touch late", "noticeably late"). To say WHERE something happened you may use a supplied m:ss timestamp ("around 0:23 in Section 2").
 - Say which direction to correct only if the input gives a direction (e.g. "more bent"); otherwise just say what differed.
 - The fix is one concrete, doable drill with a cue the dancer can feel or picture (e.g. "think of reaching out to the side as the reference does"), in a warm, encouraging tone. Not a lecture.
 - Titles are short action phrases a dancer would say, like "Open up your left arm" or "Land the move with the reference".
@@ -222,7 +242,7 @@ SCHEMA:
     {
       "finding_id": <integer copied from a top_findings entry>,
       "title": "short, plain action phrase, e.g. 'Open up your left arm'",
-      "subheading": "one plain line on where it happens, no times, e.g. 'Section 2, near the end'",
+      "subheading": "one plain line on where it happens, with the finding's time copied exactly, e.g. 'Section 2, around 0:23'",
       "description": "1-3 conversational sentences on what it looked like compared to the reference",
       "fix": "one specific, friendly drill with a cue the dancer can picture or feel"
     }
@@ -230,7 +250,7 @@ SCHEMA:
   "section_notes": [
     {"section": <integer copied from a supplied sections entry>, "note": "2-3 plain, conversational sentences on how this section went and what it looked like compared to the reference; no scores or numbers"}
   ],
-  "data_caveat": null
+  "data_caveat": "null, or one plain sentence in words only (no numbers) if the data was limited"
 }
 Give one section_notes entry for each supplied section, in order."""
 
@@ -294,7 +314,8 @@ def plain_description(f):
     bp = pretty(f.get("body_part", "this part"))
     mv = f.get("measured_value", "")
     direction = f.get("direction", "")
-    m_dir = re.match(r"user \w+ (.+)$", direction)
+    m_dir = (re.search(r"\b((?:more|less)\s+\w+)", direction)    # "user more bent" -> "more bent"
+             or re.match(r"user \w+ (.+)$", direction))
     m_deg = re.search(r"(\d+(?:\.\d+)?)\s*degree", mv)
     m_ms = re.search(r"(\d+(?:\.\d+)?)\s*ms (later|longer|earlier)", mv)
     typ = f.get("type", "position")
@@ -324,8 +345,8 @@ def where_words(f, sections=()):
             and sec["end_s"] > sec["start_s"]:
         frac = (t - sec["start_s"]) / (sec["end_s"] - sec["start_s"])
         part = "near the start" if frac < 0.34 else "in the middle" if frac < 0.67 else "near the end"
-        return f"Section {s}, {part}"
-    return f"Section {s}"
+        return f"Section {s}, {part} ({clock(t)})"
+    return f"Section {s}" + (f" ({clock(t)})" if isinstance(t, (int, float)) else "")
 
 
 def fix_from_finding(f, sections=()):
@@ -393,24 +414,45 @@ def canned_response(payload, personality):
 # Validation
 # --------------------------------------------------------------------------
 
-NUMBER_WORDS = ("zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|"
-                "fifteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|"
-                "half|quarter")
+# HARD RULE: Claude's text may contain no numbers of any kind. The only exception is a
+# "Section N" label. "one", "first", "half" and "quarter" are allowed on their own because
+# they're everyday words ("the left one", "first, ..."), but not next to a unit.
+NUMBER_WORDS = ("zero|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|"
+                "fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|"
+                "fifty|sixty|seventy|eighty|ninety|hundred|thousand|dozen|"
+                "third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|twice|thrice")
+UNIT_WORDS = (r"degrees?|deg|seconds?|secs?|milliseconds?|millisecs?|ms|percent(?:age)?|"
+              r"per\s*cent|minutes?|mins?|frames?|fps")
 MEASURE_RE = re.compile(
-    r"\d|°|\bdegrees?\b|\bmillisec|\bpercent\b|"
-    rf"\b(?:{NUMBER_WORDS})\b(?:\s+\w+){{0,2}}\s+(?:of\s+a\s+)?(?:seconds?|degrees?|ms)\b",
+    r"\d|[°%½¼¾⅓⅔]|"
+    rf"\b(?:{NUMBER_WORDS})\b|"
+    rf"\b(?:{UNIT_WORDS})\b",
     re.I)
+SECTION_LABEL_RE = re.compile(r"\bsections?\s+\d+(?:\s*(?:,|and|&)\s*\d+)*", re.I)
 
 
-def has_measure(text):
-    """True if text has a number, angle or time, ignoring 'Section 3' style labels."""
-    t = re.sub(r"\bsections?\s+\d+(?:\s*(?:,|and|&)\s*\d+)*", "section", text or "", flags=re.I)
+TIMESTAMP_RE = re.compile(r"(?<![\d.:])\d{1,2}:\d{2}(?![\d:])")
+
+
+def allowed_times(payload):
+    """Every m:ss timestamp Python supplied; Claude may only use these."""
+    out = {f["time"] for f in payload["top_findings"] if f.get("time")}
+    for sec in payload["sections"]:
+        out.update(t.strip() for t in (sec.get("time_range") or "").split(" - ") if t.strip())
+    return out
+
+
+def has_measure(text, times=()):
+    """True if text has any number, angle, time or unit. Allowed: 'Section 3' labels and
+    m:ss timestamps that Python supplied (an unsupplied timestamp still counts as a number)."""
+    t = SECTION_LABEL_RE.sub("section", text or "")
+    t = TIMESTAMP_RE.sub(lambda m: "timestamp" if m.group(0) in times else m.group(0), t)
     return bool(MEASURE_RE.search(t))
 
 
-def strip_measure_sentences(text):
+def strip_measure_sentences(text, times=()):
     sentences = SENTENCE_SPLIT.split((text or "").strip())
-    return " ".join(x for x in sentences if not has_measure(x)).strip()
+    return " ".join(x for x in sentences if not has_measure(x, times)).strip()
 
 
 SCORE_RE = re.compile(r"(\d+(?:\.\d+)?)\s*(?:/|out of)\s*100")
@@ -446,6 +488,7 @@ def validate(resp, payload, personality):
     """Keep what's valid, replace the rest with template text. Never raises."""
     fallback = canned_response(payload, personality)
     allowed = allowed_scores(payload)
+    times = allowed_times(payload)
     by_id = {f["finding_id"]: f for f in payload["top_findings"]}
     problems = []
 
@@ -460,7 +503,7 @@ def validate(resp, payload, personality):
         if not all(text_ok(v, allowed) for v in fields):
             problems.append(f"dropped fix for finding {fid}: missing field or unsupplied score")
             continue
-        if any(has_measure(v) for v in fields):
+        if any(has_measure(v, times) for v in fields):
             problems.append(f"fix for finding {fid} used numbers; used template text for it")
             fx = fix_from_finding(by_id[fid], payload["sections"])
         seen.add(fid)
@@ -470,12 +513,16 @@ def validate(resp, payload, personality):
         problems.append("no valid fixes from Claude; used template fixes")
         fixes = fallback["priority_fixes"]
 
+    caveat = resp.get("data_caveat")
+    caveat = strip_measure_sentences(caveat, times) if isinstance(caveat, str) else ""
+    if isinstance(resp.get("data_caveat"), str) and caveat != resp["data_caveat"].strip():
+        problems.append("removed sentence(s) with a number from data_caveat")
     out = {
         "priority_fixes": fixes,
-        "data_caveat": resp.get("data_caveat") if isinstance(resp.get("data_caveat"), str) else None,
+        "data_caveat": caveat or None,
     }
     raw = resp.get("overall_summary")
-    cleaned = strip_measure_sentences(strip_score_sentences(raw, allowed)) if isinstance(raw, str) else ""
+    cleaned = strip_measure_sentences(strip_score_sentences(raw, allowed), times) if isinstance(raw, str) else ""
     if isinstance(raw, str) and cleaned and cleaned != raw.strip():
         problems.append("removed sentence(s) with a score or measurement from overall_summary")
     if cleaned:
@@ -492,13 +539,44 @@ def validate(resp, payload, personality):
         if sid not in valid_ids or sid in notes or not isinstance(text, str):
             problems.append(f"dropped section note for unknown/duplicate section {sid!r}")
             continue
-        cleaned = strip_measure_sentences(strip_score_sentences(text, allowed))
+        cleaned = strip_measure_sentences(strip_score_sentences(text, allowed), times)
         if cleaned:
             notes[sid] = cleaned
     for sid, text in fallback["section_notes"].items():
         notes.setdefault(sid, text)
     out["section_notes"] = notes
     return out, problems
+
+
+GENERIC_SUMMARY = "Good work getting through the routine. Have a look at the fixes below and run it again."
+GENERIC_FIX_TEXT = {"title": "Match the reference", "subheading": "See the breakdown",
+                    "description": "This part looked different from the reference.",
+                    "fix": "Slow this part down, watch the reference, and copy it closely."}
+
+
+def enforce_no_numbers(result, payload):
+    """Final hard gate: no word field leaves here with a number in it, whatever produced it."""
+    by_id = {f["finding_id"]: f for f in payload["top_findings"]}
+    text_keys = ("title", "subheading", "description", "fix")
+    times = allowed_times(payload)
+
+    fixes = []
+    for fx in result.get("priority_fixes") or []:
+        if any(has_measure(fx.get(k), times) for k in text_keys) and fx.get("finding_id") in by_id:
+            fx = fix_from_finding(by_id[fx["finding_id"]], payload["sections"])
+        for k in text_keys:  # last resort if even the template text had a number in it
+            if has_measure(fx.get(k), times):
+                fx = dict(fx, **{k: GENERIC_FIX_TEXT[k]})
+        fixes.append(fx)
+    result["priority_fixes"] = fixes
+
+    summary = strip_measure_sentences(result.get("overall_summary"), times)
+    result["overall_summary"] = summary or GENERIC_SUMMARY
+
+    result["section_notes"] = {sid: strip_measure_sentences(n, times)
+                               for sid, n in (result.get("section_notes") or {}).items()}
+    result["data_caveat"] = strip_measure_sentences(result.get("data_caveat"), times) or None
+    return result
 
 
 # --------------------------------------------------------------------------
@@ -704,6 +782,7 @@ def debrief(params, comparison=None, personality=None, use_api=True, timeout=Non
     if result is None:
         result = canned_response(payload, persona)
         result["data_caveat"] = None
+    result = enforce_no_numbers(result, payload)
     return {"params": params, "payload": payload, "dropped": dropped,
             "result": result, "persona": persona, "source": source}
 

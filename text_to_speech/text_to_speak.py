@@ -41,13 +41,18 @@ OUTPUT_FORMAT = "mp3_44100_128"
 # priyaa is a placeholder: swap in an Indian-English voice from the Voice Library.
 PERSONALITIES = {
     "priyaa": {"voice_name": "Sarah", "voice_id": "EXAVITQu4vr4xnSDxMaL",
-               "intro": "Hi, I'm Priyaa. Let's look at how that routine went."},
+               "intro": "Hi, I'm Priyaa. Let's look at how that routine went.",
+               # built-in fallback voices, so each coach still sounds different offline
+               "mac": ["Veena", "Isha", "Samantha"], "win": ("female", 0), "espeak": "en-gb+f3"},
     "gordon": {"voice_name": "Daniel", "voice_id": "onwK4e9ZLuTAKqWW03F9",       # British, authoritative
-               "intro": "Right, I'm Gordon. Let's get that routine tightened up."},
+               "intro": "Right, I'm Gordon. Let's get that routine tightened up.",
+               "mac": ["Daniel", "Oliver", "Arthur"], "win": ("male", 0), "espeak": "en-gb+m3"},
     "ada":    {"voice_name": "Alice", "voice_id": "Xb7hH8MSUJpSbSDYk0k2",        # British, confident
-               "intro": "Hello, I'm Ada. Let's go through your routine carefully."},
+               "intro": "Hello, I'm Ada. Let's go through your routine carefully.",
+               "mac": ["Kate", "Serena", "Martha", "Karen"], "win": ("female", 1), "espeak": "en-gb+f2"},
     "bobby":  {"voice_name": "Chris", "voice_id": "iP95p4xoKVk53GoZ742B",        # American, casual
-               "intro": "Hey, I'm Bobby. Nice and easy, let's see how that went."},
+               "intro": "Hey, I'm Bobby. Nice and easy, let's see how that went.",
+               "mac": ["Alex", "Tom", "Fred", "Ralph"], "win": ("male", 1), "espeak": "en-us+m7"},
 }
 
 
@@ -141,23 +146,49 @@ def _play_mp3(data):
         os.remove(path)
 
 
-def _say_fallback(text):
-    """Speak with the computer's own built-in voice (no internet needed)."""
+def _mac_voice(candidates):
+    """First of `candidates` that is installed on this Mac (None = system default voice)."""
+    try:
+        listing = subprocess.run(["say", "-v", "?"], capture_output=True, text=True).stdout
+    except OSError:
+        return None
+    installed = {line.split()[0].lower() for line in listing.splitlines() if line.strip()}
+    return next((v for v in candidates if v.lower() in installed), None)
+
+
+# Windows: pick the Nth installed voice of a gender, so two female coaches get different voices.
+_WINDOWS_SAY = (
+    "Add-Type -AssemblyName System.Speech; "
+    "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
+    "$v = @($s.GetInstalledVoices() | Where-Object { $_.Enabled -and "
+    "$_.VoiceInfo.Gender -eq $args[0] }); "
+    "if ($v.Count -gt 0) { $s.SelectVoice($v[[int]$args[1] % $v.Count].VoiceInfo.Name) }; "
+    "$s.Rate = [int]$args[2]; "
+    "$s.Speak([Console]::In.ReadToEnd())"
+)
+
+
+def _say_fallback(text, cfg):
+    """Speak with the computer's own built-in voices (no internet needed), using a different
+    voice for each personality so the coaches still sound different."""
     system = platform.system()
     if system == "Darwin":
-        subprocess.run(["say"], input=text, text=True, check=True)
+        voice = _mac_voice(cfg.get("mac", []))
+        subprocess.run(["say"] + (["-v", voice] if voice else []), input=text, text=True, check=True)
     elif system == "Windows":
         ps = shutil.which("powershell") or shutil.which("pwsh")
-        subprocess.run([ps, "-NoProfile", "-Command",
-                        "Add-Type -AssemblyName System.Speech; "
-                        "(New-Object System.Speech.Synthesis.SpeechSynthesizer)"
-                        ".Speak([Console]::In.ReadToEnd())"],
+        gender, index = cfg.get("win", ("female", 0))
+        rate = "1" if index else "0"              # nudge the speed too, in case only one voice exists
+        subprocess.run([ps, "-NoProfile", "-Command", _WINDOWS_SAY, gender.capitalize(), str(index), rate],
                        input=text, text=True, check=True)
     else:
-        tool = shutil.which("spd-say") or shutil.which("espeak-ng") or shutil.which("espeak")
+        tool = shutil.which("espeak-ng") or shutil.which("espeak") or shutil.which("spd-say")
         if not tool:
             raise RuntimeError("No built-in voice found. On Linux install espeak-ng.")
-        args = [tool, "--wait", text] if tool.endswith("spd-say") else [tool, text]
+        if tool.endswith("spd-say"):
+            args = [tool, "--wait", text]
+        else:
+            args = [tool, "-v", cfg.get("espeak", "en"), text]
         subprocess.run(args, check=True)
 
 
@@ -181,7 +212,26 @@ def text_to_speak(text, personality, fallback_to_say=False):
     except Exception as exc:        # network, key, credits, playback...
         if not fallback_to_say:
             raise
-        print(f"ElevenLabs failed ({type(exc).__name__}: {exc}); using the built-in voice "
-              "instead.", file=sys.stderr)
-        _say_fallback(text)
+        print("\n" + "!" * 70 +
+              f"\n  ELEVENLABS FAILED for '{key}': {type(exc).__name__}: {exc}"
+              "\n  Using the computer's built-in voice instead (not the ElevenLabs voice)."
+              "\n" + "!" * 70, file=sys.stderr)
+        _say_fallback(text, cfg)
         return "built-in fallback voice"
+
+
+def check_elevenlabs():
+    """Quick diagnosis: is the key found, and can it make audio with each voice? Plays nothing."""
+    _load_env_file()
+    key = os.environ.get("ELEVENLABS_API_KEY")
+    print("API key:", f"found (ends ...{key[-4:]})" if key else "NOT FOUND")
+    for name, cfg in PERSONALITIES.items():
+        try:
+            n = len(_generate_audio("Test.", cfg["voice_id"]))
+            print(f"  {name:7} {cfg['voice_name']:7} OK ({n} bytes of audio)")
+        except Exception as exc:
+            print(f"  {name:7} {cfg['voice_name']:7} FAILED: {type(exc).__name__}: {exc}")
+
+
+if __name__ == "__main__":
+    check_elevenlabs()
