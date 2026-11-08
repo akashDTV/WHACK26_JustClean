@@ -195,15 +195,18 @@
       s.addEventListener("input", () => this.setSpeed(parseFloat(s.value), false));
       s.addEventListener("change", () => this.setSpeed(parseFloat(s.value), true));
       $("speed-reset").addEventListener("click", () => this.setSpeed(SPEED.default, true));
-      $("mirror-ref-btn").addEventListener("click", () => this.setMirrorRef(!this.state.mirrorRef));
+      // optional: if the button is ever removed from index.html, don't take the rest of the page down with it
+      $("mirror-ref-btn")?.addEventListener("click", () => this.setMirrorRef(!this.state.mirrorRef));
     },
 
     // "Mirror the dancer": flip the reference video; the server mirrors the scoring to match.
     setMirrorRef(on) {
       this.state.mirrorRef = !!on;
       const b = $("mirror-ref-btn");
-      b.setAttribute("aria-pressed", String(this.state.mirrorRef));
-      b.textContent = `Mirror the dancer: ${this.state.mirrorRef ? "on" : "off"}`;
+      if (b) {
+        b.setAttribute("aria-pressed", String(this.state.mirrorRef));
+        b.textContent = `Mirror the dancer: ${this.state.mirrorRef ? "on" : "off"}`;
+      }
       document.body.classList.toggle("ref-mirrored", this.state.mirrorRef);
       this.send("command", { name: "mirror_ref", value: this.state.mirrorRef });
     },
