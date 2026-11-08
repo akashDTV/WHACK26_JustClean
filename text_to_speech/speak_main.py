@@ -9,7 +9,7 @@ from text_to_speak import text_to_speak
 
 def main():
     text = "Nice work, your timing is getting better. Let's tighten up that left elbow."
-    personality = "bobby"          # priyaa, gordon, ada or bobby
+    personality = "priyaa"          # priyaa, gordon, ada or bobby
 
     text_to_speak(text, personality)
 
