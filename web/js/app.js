@@ -9,6 +9,9 @@
   // Practice-speed slider settings — change these to widen/narrow the range.
   const SPEED = { min: 0.5, max: 1.2, step: 0.05, default: 1 };
   const fmtRate = (r) => `${Number(r.toFixed(2))}×`;   // 0.75 -> "0.75×", 1 -> "1×"
+  // Live webcam picture (with your skeleton drawn on it) served by server/main.py (the HTML's data-src wins if it has one).
+  // It is attached to every <img class="cam-feed"> while a dance is running.
+  const CAMERA_URL = "/camera";
 
   const App = {
     state: {
@@ -29,6 +32,7 @@
       if (window.Transport) window.Transport.send(msg);
     },
 
+    
     // ---------- routing ----------
     handle(msg) {
       if (!msg || !msg.type) return;
@@ -43,6 +47,7 @@
       document.body.dataset.screen = screen;
       document.querySelectorAll(".screen").forEach((s) => s.classList.toggle("active", s.id === `screen-${screen}`));
       if (screen !== "dancing") { document.body.dataset.band = "none"; $("pop").classList.remove("show"); }
+      if (screen === "calibrating") { fitCalibration(); requestAnimationFrame(fitCalibration); }
       // move focus to the new screen's heading for keyboard / screen-reader users
       const h = document.querySelector(`#screen-${screen} h1`);
       if (h) { h.setAttribute("tabindex", "-1"); h.focus({ preventScroll: true }); }
@@ -136,10 +141,47 @@
       this.renderClips();
       const video = $("ref-video");
       if (clip.url) { video.src = clip.url; $("ref-placeholder").hidden = true; }
+      this.refreshStart();
+      this.send("command", { name: "choose_clip", value: id });
+    },
+
+    // Enable/disable the Start button for the chosen clip. Also called when Python
+    // re-sends the clip list (e.g. a clip finished being analysed).
+    refreshStart() {
+      const clip = this.state.clips.find((c) => c.id === this.state.clipId);
+      if (!clip) return;
       const ok = clip.ref_ok !== false;
       $("start-btn").disabled = !ok;
-      $("start-hint").textContent = ok ? "or press Space · you'll stand in the outline box first" : "This clip can't be used — pick another";
-      this.send("command", { name: "choose_clip", value: id });
+      $("start-hint").textContent = ok ? "or press Space · you'll stand in the outline box first" : (clip.warning || "This clip can't be used — pick another");
+    },
+
+    // Show / hide the live camera picture. Python only streams while a dance is
+    // running (the webcam is off otherwise), so we attach it when one starts.
+    setCamera(on) {
+      if (this.state.fake) return;                      // demo mode has no server camera
+      document.querySelectorAll("img.cam-feed").forEach((img) => {
+        const ph = img.parentElement.querySelector(".placeholder");
+        if (on) {
+          if (img.dataset.live) return;                 // already attached
+          img.dataset.live = "1";
+          // use the URL from the HTML (data-src) if there is one; cache-buster = fresh stream
+          img.src = `${img.dataset.src || CAMERA_URL}?t=${Date.now()}`;
+          // A live stream doesn't always fire "load" for its first frame, so also
+          // watch for the picture to get a size (checks for up to 15 s).
+          clearInterval(img._camPoll);
+          let tries = 0;
+          img._camPoll = setInterval(() => {
+            if (img.naturalWidth > 0) { markCameraReady(img); clearInterval(img._camPoll); }
+            else if (++tries > 150) clearInterval(img._camPoll);
+          }, 100);
+        } else if (img.dataset.live) {
+          clearInterval(img._camPoll);
+          delete img.dataset.live;
+          img.removeAttribute("src");
+          img.parentElement.classList.remove("has-image");   // calibration box goes back to placeholder size
+          if (ph) ph.hidden = false;
+        }
+      });
     },
 
     // Slider: updates the display live while dragging ("input"),
@@ -304,7 +346,12 @@
 
   // ---------- message handlers (Python -> page) ----------
   const HANDLERS = {
-    clips(m) { App.state.clips = m.clips || []; App.renderClips(); if (App.state.screen === "loading") App.show("chooser"); },
+    clips(m) {
+      App.state.clips = m.clips || [];
+      App.renderClips();
+      App.refreshStart();
+      if (App.state.screen === "loading") App.show("chooser");
+    },
 
     state(m) {
       const map = { waiting: "chooser", loading: "loading", calibrating: "calibrating", countdown: "dancing", playing: "dancing", paused: "dancing", finished: "report", error: "error" };
@@ -312,6 +359,9 @@
       if (m.state === "loading") $("loading-msg").textContent = m.reason || "Loading the body-tracking model";
       if (m.state === "error") $("error-msg").textContent = m.reason || "Please try again.";
       if (m.state === "playing") hideOverlays();
+      // webcam picture: on from calibration until the dance ends
+      if (["calibrating", "countdown", "playing", "paused"].includes(m.state)) App.setCamera(true);
+      else if (["waiting", "loading", "finished", "error"].includes(m.state)) App.setCamera(false);
       if (m.state === "finished") {
         $("rep-caption").textContent = "Your coach is reviewing your dance…";
         $("rep-caption-more").replaceChildren();
@@ -513,6 +563,23 @@
     App.state.cp = null;
   }
   function hideOverlays() { $("countdown-overlay").classList.remove("show"); $("banner-overlay").classList.remove("show"); }
+
+  // Calibration screen: let the camera picture (and its dashed frame) be as big as
+  // fits in the window WITHOUT scrolling. Sets --calib-max-h, used by the CSS block
+  // in index.html. Called when the screen opens, on resize, and when the picture arrives.
+  function fitCalibration() {
+    const wrap = document.querySelector("#screen-calibrating .calib-wrap");
+    if (!wrap || !wrap.offsetParent) return;               // screen isn't showing
+    const top = wrap.getBoundingClientRect().top + window.scrollY;
+    const h = Math.max(240, Math.floor(window.innerHeight - top - 24));
+    document.documentElement.style.setProperty("--calib-max-h", `${h}px`);
+  }
+  // First camera frame arrived: hide the placeholder; the frame now wraps the picture.
+  function markCameraReady(img) {
+    const ph = img.parentElement.querySelector(".placeholder"); if (ph) ph.hidden = true;
+    img.parentElement.classList.add("has-image");
+    fitCalibration();
+  }
   let popTimer = null;
   function showPop(text, opts = {}) {
     const p = $("pop");
@@ -630,9 +697,14 @@
 
     // webcam stream (real mode only)
     document.querySelectorAll("img.cam-feed").forEach((img) => {
-      img.addEventListener("load", () => { const ph = img.parentElement.querySelector(".placeholder"); if (ph) ph.hidden = true; });
-      img.addEventListener("error", () => { const ph = img.parentElement.querySelector(".placeholder"); if (ph) ph.hidden = false; });
+      img.addEventListener("load", () => { if (img.dataset.live) markCameraReady(img); });
+      img.addEventListener("error", () => {
+        const ph = img.parentElement.querySelector(".placeholder"); if (ph) ph.hidden = false;
+        img.parentElement.classList.remove("has-image");
+      });
     });
+
+    window.addEventListener("resize", fitCalibration);
 
     // keyboard shortcuts: Space start, M mirror, P auto-pause, R reset, D debug
     document.addEventListener("keydown", (e) => {
